@@ -14,6 +14,7 @@ from ggyt_bot.broker import AlpacaBroker, SimulatedBroker
 from ggyt_bot.core.state_manager import StateManager
 from ggyt_bot.dashboard.app import run_dashboard
 from ggyt_bot.engine import TradingEngine
+from ggyt_bot.execution.broker_mt5 import MT5Broker
 from ggyt_bot.security.policy import LocalOnlyPolicy, enforce_local_only
 from ggyt_bot.settings import BotConfig, RuntimeSettings
 from ggyt_bot.state import BotState
@@ -29,7 +30,15 @@ def _load_engine(config_path: Path) -> tuple[TradingEngine, RuntimeSettings]:
     settings = RuntimeSettings()
     settings.validate_execution_safety()
     database = TradingDatabase(settings.ggyt_db_path)
-    broker = AlpacaBroker(settings)
+    if settings.broker == "MT5":
+        broker = MT5Broker(settings, database=database)
+        broker.connect()
+    elif settings.broker == "PAPER":
+        broker = SimulatedBroker(
+            {symbol: [100 + i * 0.1 for i in range(240)] for symbol in config.symbols}
+        )
+    else:
+        broker = AlpacaBroker(settings)
     state = StateManager(settings.ggyt_state_path, broker, database).startup()
     return TradingEngine(broker, config, state, settings.ggyt_log_path, database), settings
 
@@ -141,6 +150,53 @@ def backtest(
         f"MaxDD={result.max_drawdown:.2%} PF={result.profit_factor:.2f} "
         f"Expectancy={result.expectancy:.2f} WinRate={result.win_rate:.2%}"
     )
+
+
+@app.command("mt5-connect")
+def mt5_connect() -> None:
+    """Connect to the local MetaTrader 5 terminal and validate account/symbol safety."""
+    settings = RuntimeSettings()
+    database = TradingDatabase(settings.ggyt_db_path)
+    broker = MT5Broker(settings, database=database)
+    broker.connect()
+    console.print("MT5 connected")
+
+
+@app.command("mt5-status")
+def mt5_status() -> None:
+    """Show local MT5 account and connection status."""
+    settings = RuntimeSettings()
+    broker = MT5Broker(settings, database=TradingDatabase(settings.ggyt_db_path))
+    broker.connect()
+    console.print(broker.health_check())
+
+
+@app.command("mt5-symbols")
+def mt5_symbols() -> None:
+    """Validate configured MT5 symbols and show market status."""
+    settings = RuntimeSettings()
+    broker = MT5Broker(settings, database=TradingDatabase(settings.ggyt_db_path))
+    broker.connect()
+    rows = [broker.get_market_status(symbol) for symbol in settings.mt5_allowed_symbols]
+    _print_events([{**row, "type": "MT5_SYMBOL"} for row in rows])
+
+
+@app.command("mt5-sync")
+def mt5_sync() -> None:
+    """Synchronize MT5 positions, orders, balance and equity into local storage."""
+    settings = RuntimeSettings()
+    broker = MT5Broker(settings, database=TradingDatabase(settings.ggyt_db_path))
+    broker.connect()
+    console.print(broker.sync())
+
+
+@app.command("mt5-health")
+def mt5_health() -> None:
+    """Run MT5 watchdog-style health checks with optional local reconnect."""
+    settings = RuntimeSettings()
+    broker = MT5Broker(settings, database=TradingDatabase(settings.ggyt_db_path))
+    broker.connect()
+    console.print(broker.health_check())
 
 
 def _print_events(events: list[dict[str, object]]) -> None:

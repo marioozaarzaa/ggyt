@@ -429,3 +429,112 @@ Además de las tablas operativas principales, se añaden:
 - `adaptive_adjustments`
 
 Esto permite auditar régimen, volatilidad, spread, scoring y cambios limitados de parámetros.
+
+## Integración MetaTrader 5 local
+
+GGYT mantiene Alpaca y añade MetaTrader 5 como broker adicional. MT5 funciona **solo contra el terminal instalado localmente en tu ordenador**; no se añaden VPS, webhooks, APIs públicas, sockets públicos ni ejecución distribuida.
+
+### Instalación MT5
+
+1. Instala MetaTrader 5 en tu ordenador.
+2. Instala dependencias Python:
+
+```bash
+pip install -r requirements.txt
+# o
+pip install -e '.[dev]'
+```
+
+Dependencias MT5 añadidas:
+
+- `MetaTrader5`
+- `pytz`
+
+### Configuración MT5
+
+Ejemplo `.env`:
+
+```bash
+BROKER=MT5
+MT5_LOGIN=123456
+MT5_PASSWORD=tu_password
+MT5_SERVER=Broker-Demo
+MT5_TERMINAL_PATH=/ruta/a/terminal64.exe
+MT5_MAGIC_NUMBER=888888
+MT5_TIMEOUT=60000
+MT5_MAX_SLIPPAGE=10
+MT5_MAX_SPREAD_PCT=0.003
+MT5_AUTO_RECONNECT=true
+MT5_ALLOWED_SYMBOLS=EURUSD,XAUUSD,GBPUSD,US100,USDJPY,NAS100,SPX500
+GGYT_DRY_RUN=true
+GGYT_ALLOW_LIVE_TRADING=false
+GGYT_CONFIRM_MT5_ACCOUNT=
+```
+
+Para enviar órdenes reales por MT5 se exige:
+
+```bash
+GGYT_DRY_RUN=false
+GGYT_ALLOW_LIVE_TRADING=true
+GGYT_CONFIRM_MT5_ACCOUNT=<login exacto de la cuenta MT5>
+```
+
+Si el login del terminal no coincide con `GGYT_CONFIRM_MT5_ACCOUNT`, el broker lanza `SecurityError` y no opera.
+
+### Comandos MT5
+
+```bash
+ggyt mt5-connect
+ggyt mt5-status
+ggyt mt5-symbols
+ggyt mt5-sync
+ggyt mt5-health
+```
+
+### Funcionalidades MT5 implementadas
+
+`MT5Broker` implementa la interfaz `BrokerBase`:
+
+- `connect()` / `disconnect()` / `is_connected()`
+- `get_balance()` / `get_equity()`
+- `get_positions()` / `get_orders()`
+- `get_market_data()` / `get_tick()` / `get_spread()` / `get_volume()`
+- `get_symbol_info()` / `get_market_status()`
+- `submit_order()` / `close_position()` / `cancel_order()`
+- `sync()` / `health_check()`
+
+Soporta órdenes:
+
+- BUY market
+- SELL market
+- BUY LIMIT / SELL LIMIT
+- BUY STOP / SELL STOP
+- STOP LOSS / TAKE PROFIT mediante `sl` / `tp`
+- ATR trailing stop con `update_atr_trailing_stop()`
+
+Antes de enviar una orden valida:
+
+- símbolo permitido en `MT5_ALLOWED_SYMBOLS`
+- símbolo visible/activado con `symbol_select()`
+- spread máximo
+- tick/market data disponible
+- permisos de trading
+- cuenta confirmada para live
+
+### Reconexión y recuperación
+
+Si la conexión se pierde y `MT5_AUTO_RECONNECT=true`, el broker intenta reconectar con backoff:
+
+```text
+1s, 2s, 5s, 10s, 30s
+```
+
+`sync()` sincroniza posiciones, órdenes, balance y equity en SQLite/JSONL. Los eventos de conexión, errores, rechazos, órdenes, fills simulados, spread y reconexiones se auditan localmente.
+
+### Errores comunes MT5
+
+- **`MetaTrader5 is required`**: instala `MetaTrader5` en el mismo Python donde ejecutas `ggyt`.
+- **`account_info() returned None`**: el terminal no está abierto, el login es incorrecto o el servidor no responde.
+- **`symbol is not in MT5_ALLOWED_SYMBOLS`**: añade el símbolo explícitamente al allowlist.
+- **`Could not activate symbol`**: el broker no ofrece ese símbolo o tiene otro nombre, por ejemplo `NAS100.cash`.
+- **`MT5 account login does not match`**: revisa `GGYT_CONFIRM_MT5_ACCOUNT` antes de live.

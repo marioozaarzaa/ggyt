@@ -123,6 +123,27 @@ class RuntimeSettings:
     ggyt_db_path: Path = field(
         default_factory=lambda: Path(os.getenv("GGYT_DB_PATH", "data/trading.sqlite3"))
     )
+    broker: str = field(default_factory=lambda: os.getenv("BROKER", "ALPACA").upper())
+    mt5_login: str = field(default_factory=lambda: os.getenv("MT5_LOGIN", ""))
+    mt5_password: str = field(default_factory=lambda: os.getenv("MT5_PASSWORD", ""))
+    mt5_server: str = field(default_factory=lambda: os.getenv("MT5_SERVER", ""))
+    mt5_terminal_path: str = field(default_factory=lambda: os.getenv("MT5_TERMINAL_PATH", ""))
+    mt5_magic_number: int = field(default_factory=lambda: _env_int("MT5_MAGIC_NUMBER", 888888))
+    mt5_timeout: int = field(default_factory=lambda: _env_int("MT5_TIMEOUT", 60000))
+    mt5_max_slippage: int = field(default_factory=lambda: _env_int("MT5_MAX_SLIPPAGE", 10))
+    mt5_max_spread_pct: float = field(
+        default_factory=lambda: _env_float("MT5_MAX_SPREAD_PCT", 0.003)
+    )
+    mt5_default_risk_percent: float = field(
+        default_factory=lambda: _env_float("MT5_DEFAULT_RISK_PERCENT", 0.005)
+    )
+    mt5_auto_reconnect: bool = field(default_factory=lambda: _env_bool("MT5_AUTO_RECONNECT", True))
+    mt5_allowed_symbols: list[str] = field(
+        default_factory=lambda: _env_csv("MT5_ALLOWED_SYMBOLS", "EURUSD,XAUUSD,GBPUSD,US100")
+    )
+    ggyt_confirm_mt5_account: str = field(
+        default_factory=lambda: os.getenv("GGYT_CONFIRM_MT5_ACCOUNT", "")
+    )
     run_mode: str = field(default_factory=lambda: os.getenv("RUN_MODE", "LOCAL_ONLY"))
     allow_remote: bool = field(default_factory=lambda: _env_bool("ALLOW_REMOTE", False))
     allow_webhooks: bool = field(default_factory=lambda: _env_bool("ALLOW_WEBHOOKS", False))
@@ -152,6 +173,8 @@ class RuntimeSettings:
 
     def validate_execution_safety(self) -> None:
         self.validate_local_only()
+        if self.broker not in {"ALPACA", "MT5", "PAPER"}:
+            raise ValueError("BROKER must be ALPACA, MT5, or PAPER")
         if not self.alpaca_paper and not self.ggyt_allow_live_trading:
             raise ValueError(
                 "Live trading is blocked. Set GGYT_ALLOW_LIVE_TRADING=true only after "
@@ -163,6 +186,10 @@ class RuntimeSettings:
             raise ValueError("GGYT_CONFIRM_LIVE_ACCOUNT_ID is required for live trading")
         if not self.alpaca_paper and self.ggyt_live_confirmation != "I_ACCEPT_LIVE_TRADING_RISK":
             raise ValueError("GGYT_LIVE_CONFIRMATION=I_ACCEPT_LIVE_TRADING_RISK is required")
+        if self.broker == "MT5" and not self.ggyt_dry_run and not self.ggyt_allow_live_trading:
+            raise ValueError("MT5 live order routing requires GGYT_ALLOW_LIVE_TRADING=true")
+        if self.broker == "MT5" and not self.ggyt_dry_run and not self.ggyt_confirm_mt5_account:
+            raise ValueError("GGYT_CONFIRM_MT5_ACCOUNT is required for MT5 live order routing")
 
 
 def _check_range(
@@ -184,3 +211,22 @@ def _env_bool(name: str, default: bool) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return int(value)
+
+
+def _env_csv(name: str, default: str) -> list[str]:
+    raw = os.getenv(name, default)
+    return [item.strip().upper() for item in raw.split(",") if item.strip()]
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return float(value)

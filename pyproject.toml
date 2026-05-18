@@ -17,6 +17,8 @@ dependencies = [
   "streamlit>=1.35",
   "keyring>=25.0",
   "cryptography>=42.0",
+  "MetaTrader5>=5.0.45",
+  "pytz>=2024.1",
 ]
 
 [project.optional-dependencies]
