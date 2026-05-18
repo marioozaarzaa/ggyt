@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+logs/*.jsonl
+logs/*.log
+state.json
+data/*.sqlite3
+backtests/*.csv
+backtests/*.json
+backtests/*.svg
