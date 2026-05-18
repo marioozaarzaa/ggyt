@@ -8,7 +8,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from ggyt_bot.backtesting.engine import run_backtest, run_walk_forward
+from ggyt_bot.backtesting.engine import BacktestCosts, run_backtest
+from ggyt_bot.backtesting.walkforward import run_walk_forward
 from ggyt_bot.broker import AlpacaBroker, SimulatedBroker
 from ggyt_bot.core.state_manager import StateManager
 from ggyt_bot.dashboard.app import run_dashboard
@@ -108,6 +109,11 @@ def backtest(
     to_date: str = typer.Option("2024-12-31", "--to"),
     strategy: str = "sma",
     walk_forward: bool = False,
+    commission: float = 1.0,
+    spread_bps: float = 2.0,
+    slippage_bps: float = 3.0,
+    latency_ms: int = 100,
+    market_impact_bps: float = 1.0,
 ) -> None:
     """Run local backtest and save CSV, JSON and SVG equity curve under backtests/."""
     start = datetime.fromisoformat(from_date).replace(tzinfo=UTC)
@@ -117,7 +123,19 @@ def backtest(
         for name, result in results.items():
             console.print(f"{name}: PnL={result.pnl:.2f} Sharpe={result.sharpe:.2f}")
         return
-    result = run_backtest(symbol=symbol, start=start, end=end, strategy_name=strategy)
+    result = run_backtest(
+        symbol=symbol,
+        start=start,
+        end=end,
+        strategy_name=strategy,
+        costs=BacktestCosts(
+            commission_per_trade=commission,
+            spread_bps=spread_bps,
+            slippage_bps=slippage_bps,
+            latency_ms=latency_ms,
+            market_impact_bps_per_100k=market_impact_bps,
+        ),
+    )
     console.print(
         f"PnL={result.pnl:.2f} Sharpe={result.sharpe:.2f} Sortino={result.sortino:.2f} "
         f"MaxDD={result.max_drawdown:.2%} PF={result.profit_factor:.2f} "

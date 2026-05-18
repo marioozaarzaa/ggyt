@@ -5,16 +5,28 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ggyt_bot.broker import Broker
+from ggyt_bot.broker import Broker, SimulatedBroker
 from ggyt_bot.data.feature_engine import build_features
 from ggyt_bot.data.market_data import OHLCVSeries
+from ggyt_bot.data.market_regime import (
+    MarketRegime,
+    detect_market_regime,
+    regime_position_multiplier,
+)
+from ggyt_bot.execution.execution_engine import ExecutionEngine
 from ggyt_bot.models import Signal
 from ggyt_bot.risk import RiskManager
+from ggyt_bot.risk.circuit_breaker import CircuitBreaker
 from ggyt_bot.settings import BotConfig
 from ggyt_bot.state import BotState
 from ggyt_bot.storage.database import TradingDatabase
-from ggyt_bot.strategies import STRATEGY_REGISTRY, SMAStrategy
-from ggyt_bot.strategies.strategy_base import StrategyContext
+from ggyt_bot.strategies import (
+    STRATEGY_REGISTRY,
+    MeanReversionStrategy,
+    SMAStrategy,
+    TrendStrategy,
+)
+from ggyt_bot.strategies.strategy_base import StrategyBase, StrategyContext
 
 
 class TradingEngine:
@@ -32,10 +44,12 @@ class TradingEngine:
         self.log_path = log_path
         self.database = database
         strategy_cls = STRATEGY_REGISTRY.get(config.strategy_name, SMAStrategy)
-        self.strategy = (
-            strategy_cls(config.strategy) if strategy_cls is SMAStrategy else strategy_cls()
-        )
+        self.strategy = _build_strategy(strategy_cls, config)
         self.risk = RiskManager(config)
+        self.execution = ExecutionEngine(config.execution)
+        self.circuit_breaker = CircuitBreaker(
+            hard_drawdown_pct=max(config.risk.max_drawdown_pct, 0.10)
+        )
 
     def run_once(self) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
@@ -57,14 +71,38 @@ class TradingEngine:
             closes = self.broker.historical_closes(symbol, history_limit)
             market_data = OHLCVSeries.from_closes(symbol, closes)
             features = build_features(market_data)
-            context = StrategyContext(symbol=symbol, market_data=market_data, features=features)
-            decision = self.strategy.generate_signal(context)
+            regime = detect_market_regime(features)
+            events.append(
+                self._event(
+                    "MARKET_CONDITION",
+                    symbol=symbol,
+                    regime=regime.value,
+                    volatility=features.volatility20,
+                    spread=features.spread_pct,
+                )
+            )
+            if regime is MarketRegime.PANIC:
+                self.state.halt(f"panic market regime detected for {symbol}")
+                self.broker.panic_flatten()
+                events.append(self._event("HALT", symbol=symbol, reason=self.state.halt_reason))
+                break
+            strategy = self._strategy_for_regime(regime)
+            context = StrategyContext(
+                symbol=symbol,
+                market_data=market_data,
+                features=features,
+                account_equity=account.equity,
+                market_regime=regime,
+            )
+            decision = strategy.generate_signal(context)
             events.append(
                 self._event(
                     "SIGNAL",
                     symbol=symbol,
                     signal=decision.signal.value,
-                    strategy=getattr(self.strategy, "name", "unknown"),
+                    strategy=getattr(strategy, "name", "unknown"),
+                    confidence=round(decision.confidence, 6),
+                    score=round(decision.score, 6),
                     strength=round(decision.strength, 6),
                     reason=decision.reason,
                 )
@@ -76,10 +114,34 @@ class TradingEngine:
                     decision,
                     atr=features.atr14,
                     price=features.last_close,
+                ) * regime_position_multiplier(regime)
+                execution_decision = self.execution.validate_trade(
+                    notional=notional,
+                    features=features,
                 )
-                if notional > 1:
-                    self.broker.buy_notional(symbol, notional)
-                    events.append(self._event("BUY", symbol=symbol, notional=round(notional, 2)))
+                if isinstance(self.broker, SimulatedBroker):
+                    execution_decision = execution_decision.__class__(
+                        True,
+                        "simulated broker bypasses wall-clock trading windows",
+                        execution_decision.estimated_spread_pct,
+                        execution_decision.estimated_slippage_pct,
+                        [notional],
+                    )
+                if execution_decision.allowed and notional > 1:
+                    for order_slice in execution_decision.order_slices:
+                        self.broker.buy_notional(symbol, order_slice)
+                    events.append(
+                        self._event(
+                            "BUY",
+                            symbol=symbol,
+                            notional=round(notional, 2),
+                            slices=len(execution_decision.order_slices),
+                        )
+                    )
+                else:
+                    events.append(
+                        self._event("SKIP_TRADE", symbol=symbol, reason=execution_decision.reason)
+                    )
             elif decision.signal is Signal.SELL and symbol in held_symbols:
                 self.broker.close_position(symbol)
                 events.append(self._event("CLOSE", symbol=symbol, reason=decision.reason))
@@ -93,6 +155,15 @@ class TradingEngine:
             if self.state.halted:
                 return
             time.sleep(self.config.execution.poll_seconds)
+
+    def _strategy_for_regime(self, regime: MarketRegime) -> StrategyBase:
+        if self.config.strategy_name not in {"sma", "multi_indicator_trend"}:
+            return self.strategy
+        if regime is MarketRegime.TRENDING:
+            return TrendStrategy()
+        if regime is MarketRegime.RANGING:
+            return MeanReversionStrategy()
+        return self.strategy
 
     def _event(self, event_type: str, **payload: object) -> dict[str, object]:
         return {"ts": datetime.now(UTC).isoformat(), "type": event_type, **payload}
@@ -108,6 +179,8 @@ class TradingEngine:
                 "CLOSE": "orders",
                 "HALT": "errors",
                 "PANIC_FLATTEN": "orders",
+                "MARKET_CONDITION": "market_conditions",
+                "SKIP_TRADE": "orders",
             }.get(str(event.get("type")), "daily_stats")
             self.database.record(table, event)
 
@@ -118,3 +191,9 @@ class TradingEngine:
         with self.log_path.open("a", encoding="utf-8") as handle:
             for event in events:
                 handle.write(json.dumps(event, sort_keys=True) + "\n")
+
+
+def _build_strategy(strategy_cls: type[StrategyBase], config: BotConfig) -> StrategyBase:
+    if strategy_cls is SMAStrategy:
+        return strategy_cls(config.strategy)
+    return strategy_cls()

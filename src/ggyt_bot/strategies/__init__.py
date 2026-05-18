@@ -1,3 +1,4 @@
+from ggyt_bot.strategies.ensemble import EnsembleStrategy
 from ggyt_bot.strategies.mean_reversion import MeanReversionStrategy
 from ggyt_bot.strategies.momentum import MomentumStrategy
 from ggyt_bot.strategies.sma import MultiIndicatorTrendStrategy, SMAStrategy
@@ -10,9 +11,11 @@ STRATEGY_REGISTRY = {
     "momentum": MomentumStrategy,
     "trend": TrendStrategy,
     "mean_reversion": MeanReversionStrategy,
+    "ensemble": EnsembleStrategy,
 }
 
 __all__ = [
+    "EnsembleStrategy",
     "MeanReversionStrategy",
     "MomentumStrategy",
     "MultiIndicatorTrendStrategy",

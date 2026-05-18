@@ -22,6 +22,8 @@ class StrategyDecision:
     signal: Signal
     strength: float
     reason: str
+    confidence: float = 0.0
+    score: float = 0.0
 
 
 @dataclass(frozen=True)

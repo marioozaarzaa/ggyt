@@ -13,7 +13,23 @@ class MeanReversionStrategy(StrategyBase):
         if rsi is None:
             return StrategyDecision(context.symbol, Signal.HOLD, 0.0, "insufficient RSI history")
         if rsi < 30:
-            return StrategyDecision(context.symbol, Signal.BUY, (30 - rsi) / 30, "RSI oversold")
+            score = min(1.0, (30 - rsi) / 15)
+            return StrategyDecision(
+                context.symbol,
+                Signal.BUY,
+                score,
+                "RSI oversold",
+                confidence=score,
+                score=score,
+            )
         if rsi > 70:
-            return StrategyDecision(context.symbol, Signal.SELL, (rsi - 70) / 30, "RSI overbought")
+            score = -min(1.0, (rsi - 70) / 15)
+            return StrategyDecision(
+                context.symbol,
+                Signal.SELL,
+                abs(score),
+                "RSI overbought",
+                confidence=abs(score),
+                score=score,
+            )
         return StrategyDecision(context.symbol, Signal.HOLD, 0.0, "RSI neutral")

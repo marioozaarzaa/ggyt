@@ -20,14 +20,25 @@ class SMAStrategy(StrategyBase):
 
     def generate_signal(self, context: StrategyContext) -> StrategyDecision:
         decision = self._legacy.decide(context.symbol, context.market_data.close)
+        score = decision.strength if decision.signal is Signal.BUY else -decision.strength
+        if decision.signal is Signal.HOLD:
+            score = 0.0
+        decision = StrategyDecision(
+            decision.symbol,
+            decision.signal,
+            decision.strength,
+            decision.reason,
+            confidence=min(1.0, abs(score)),
+            score=score,
+        )
         return self.validate_signal(decision, context)
 
 
 class MultiIndicatorTrendStrategy(StrategyBase):
     name = "multi_indicator_trend"
     parameters = {
-        "buy": "EMA20 > EMA50 > EMA200 AND 45 < RSI < 65 AND relative_volume > 1",
-        "sell": "EMA20 < EMA50",
+        "buy": "score > 0.8 from EMA alignment, RSI, relative volume and volatility",
+        "sell": "EMA20 < EMA50 or score < -0.8",
     }
 
     def generate_signal(self, context: StrategyContext) -> StrategyDecision:
@@ -50,22 +61,47 @@ class MultiIndicatorTrendStrategy(StrategyBase):
         assert features.rsi14 is not None
         assert features.relative_volume20 is not None
 
-        buy = (
-            features.ema20 > features.ema50
-            and features.ema50 > features.ema200
-            and features.rsi14 > 45
-            and features.rsi14 < 65
-            and features.relative_volume20 > 1
-        )
-        sell = features.ema20 < features.ema50
-        if buy:
-            strength = (features.ema20 - features.ema50) / features.ema50
-            return StrategyDecision(
-                context.symbol, Signal.BUY, strength, "multi-indicator trend buy"
-            )
-        if sell:
-            strength = (features.ema50 - features.ema20) / features.ema50
-            return StrategyDecision(context.symbol, Signal.SELL, strength, "EMA20 below EMA50")
+        score = 0.0
+        reasons: list[str] = []
+        ema_alignment = features.ema20 > features.ema50 > features.ema200
+        if ema_alignment:
+            score += 0.4
+            reasons.append("EMA bullish alignment")
+        elif features.ema20 < features.ema50:
+            score -= 1.0
+            reasons.append("EMA20 below EMA50")
+
+        if 45 < features.rsi14 < 65:
+            score += 0.2
+            reasons.append("RSI in trend continuation range")
+        elif features.rsi14 > 75:
+            score -= 0.2
+            reasons.append("RSI overheated")
+
+        if features.relative_volume20 > 1:
+            score += 0.2
+            reasons.append("relative volume confirms")
+
+        volatility_ok = features.volatility20 is None or features.volatility20 < 0.30
+        if volatility_ok:
+            score += 0.2
+            reasons.append("volatility acceptable")
+        else:
+            score -= 0.4
+            reasons.append("volatility elevated")
+
+        if score > 0.8:
+            signal = Signal.BUY
+        elif score < -0.8:
+            signal = Signal.SELL
+        else:
+            signal = Signal.HOLD
+        reason = "; ".join(reasons) if reasons else "multi-indicator filters not aligned"
         return StrategyDecision(
-            context.symbol, Signal.HOLD, 0.0, "multi-indicator filters not aligned"
+            context.symbol,
+            signal,
+            abs(score),
+            reason,
+            confidence=min(1.0, abs(score)),
+            score=score,
         )

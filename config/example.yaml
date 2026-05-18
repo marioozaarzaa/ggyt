@@ -1,6 +1,6 @@
 # Conservative example. Paper/dry-run is enforced unless env vars explicitly allow live trading.
 symbols: ["SPY", "QQQ"]
-strategy_name: "multi_indicator_trend"
+strategy_name: "ensemble"
 strategy:
   short_window: 20
   long_window: 50
@@ -19,3 +19,8 @@ execution:
   poll_seconds: 60
   extended_hours: false
   min_cash_reserve_pct: 0.50
+  trading_windows: ["09:45-11:30", "14:00-16:00"]
+  max_spread_pct: 0.002
+  max_slippage_pct: 0.003
+  avoid_open_minutes: 15
+  avoid_close_minutes: 0

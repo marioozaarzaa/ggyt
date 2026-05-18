@@ -15,6 +15,15 @@ from ggyt_bot.strategies.strategy_base import StrategyContext
 
 
 @dataclass(frozen=True)
+class BacktestCosts:
+    commission_per_trade: float = 1.0
+    spread_bps: float = 2.0
+    slippage_bps: float = 3.0
+    latency_ms: int = 100
+    market_impact_bps_per_100k: float = 1.0
+
+
+@dataclass(frozen=True)
 class BacktestResult:
     symbol: str
     strategy: str
@@ -26,6 +35,11 @@ class BacktestResult:
     expectancy: float
     win_rate: float
     trades: int
+    commission_paid: float
+    estimated_spread_paid: float
+    estimated_slippage_paid: float
+    estimated_market_impact_paid: float
+    latency_ms: int
     equity_curve: list[float]
 
 
@@ -41,7 +55,9 @@ def run_backtest(
     end: datetime,
     strategy_name: str = "sma",
     output_dir: Path = Path("backtests"),
+    costs: BacktestCosts | None = None,
 ) -> BacktestResult:
+    costs = costs or BacktestCosts()
     closes = synthetic_prices(start, end)
     strategy_cls = STRATEGY_REGISTRY.get(strategy_name, SMAStrategy)
     strategy = strategy_cls()
@@ -53,6 +69,10 @@ def run_backtest(
     equity_curve: list[float] = []
     returns: list[float] = []
     previous_equity = cash
+    commission_paid = 0.0
+    spread_paid = 0.0
+    slippage_paid = 0.0
+    market_impact_paid = 0.0
     for index in range(220, len(closes)):
         window = closes[: index + 1]
         series = OHLCVSeries.from_closes(symbol, window)
@@ -61,25 +81,43 @@ def run_backtest(
         price = closes[index]
         if decision.signal is Signal.BUY and shares == 0:
             notional = cash * 0.95
-            shares = notional / price
+            execution_price, cost_breakdown = _apply_costs(price, notional, costs, side=1)
+            shares = max(0.0, (notional - cost_breakdown["commission"]) / execution_price)
             cash -= notional
-            entry_price = price
+            entry_price = execution_price
+            commission_paid += cost_breakdown["commission"]
+            spread_paid += cost_breakdown["spread"]
+            slippage_paid += cost_breakdown["slippage"]
+            market_impact_paid += cost_breakdown["impact"]
         elif decision.signal is Signal.SELL and shares > 0:
-            pnl = shares * (price - entry_price)
+            notional = shares * price
+            execution_price, cost_breakdown = _apply_costs(price, notional, costs, side=-1)
+            gross = shares * execution_price
+            pnl = gross - shares * entry_price - cost_breakdown["commission"]
             if pnl >= 0:
                 wins.append(pnl)
             else:
                 losses.append(abs(pnl))
-            cash += shares * price
+            cash += gross - cost_breakdown["commission"]
             shares = 0.0
+            commission_paid += cost_breakdown["commission"]
+            spread_paid += cost_breakdown["spread"]
+            slippage_paid += cost_breakdown["slippage"]
+            market_impact_paid += cost_breakdown["impact"]
         equity = cash + shares * price
         equity_curve.append(equity)
         returns.append((equity - previous_equity) / previous_equity if previous_equity else 0.0)
         previous_equity = equity
     if shares > 0:
-        pnl = shares * (closes[-1] - entry_price)
+        notional = shares * closes[-1]
+        execution_price, cost_breakdown = _apply_costs(closes[-1], notional, costs, side=-1)
+        pnl = shares * execution_price - shares * entry_price - cost_breakdown["commission"]
         (wins if pnl >= 0 else losses).append(abs(pnl))
-        cash += shares * closes[-1]
+        cash += shares * execution_price - cost_breakdown["commission"]
+        commission_paid += cost_breakdown["commission"]
+        spread_paid += cost_breakdown["spread"]
+        slippage_paid += cost_breakdown["slippage"]
+        market_impact_paid += cost_breakdown["impact"]
     pnl = cash - 100_000.0
     max_dd = _max_drawdown(equity_curve)
     sharpe = _sharpe(returns)
@@ -99,45 +137,20 @@ def run_backtest(
         expectancy=expectancy,
         win_rate=win_rate,
         trades=trades,
+        commission_paid=commission_paid,
+        estimated_spread_paid=spread_paid,
+        estimated_slippage_paid=slippage_paid,
+        estimated_market_impact_paid=market_impact_paid,
+        latency_ms=costs.latency_ms,
         equity_curve=equity_curve,
     )
     save_backtest(result, output_dir)
     return result
 
 
-def run_walk_forward(
-    symbol: str,
-    strategy_name: str,
-    output_dir: Path = Path("backtests"),
-) -> dict[str, BacktestResult]:
-    return {
-        "train_2022_2024": run_backtest(
-            symbol=symbol,
-            start=datetime(2022, 1, 1, tzinfo=UTC),
-            end=datetime(2024, 12, 31, tzinfo=UTC),
-            strategy_name=strategy_name,
-            output_dir=output_dir,
-        ),
-        "validation_2025": run_backtest(
-            symbol=symbol,
-            start=datetime(2025, 1, 1, tzinfo=UTC),
-            end=datetime(2025, 12, 31, tzinfo=UTC),
-            strategy_name=strategy_name,
-            output_dir=output_dir,
-        ),
-        "forward_2026": run_backtest(
-            symbol=symbol,
-            start=datetime(2026, 1, 1, tzinfo=UTC),
-            end=datetime(2026, 12, 31, tzinfo=UTC),
-            strategy_name=strategy_name,
-            output_dir=output_dir,
-        ),
-    }
-
-
 def save_backtest(result: BacktestResult, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+    stamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
     stem = f"{result.symbol}_{result.strategy}_{stamp}"
     payload = result.__dict__.copy()
     (output_dir / f"{stem}.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -146,6 +159,22 @@ def save_backtest(result: BacktestResult, output_dir: Path) -> None:
         writer.writerow(["index", "equity"])
         writer.writerows(enumerate(result.equity_curve))
     _write_svg_equity_curve(output_dir / f"{stem}.svg", result.equity_curve)
+
+
+def _apply_costs(
+    price: float, notional: float, costs: BacktestCosts, *, side: int
+) -> tuple[float, dict[str, float]]:
+    spread = notional * costs.spread_bps / 10_000
+    slippage = notional * costs.slippage_bps / 10_000
+    impact = notional * (costs.market_impact_bps_per_100k * (notional / 100_000)) / 10_000
+    price_adjustment = (spread + slippage + impact) / max(notional / price, 1e-9)
+    execution_price = price + (price_adjustment if side > 0 else -price_adjustment)
+    return execution_price, {
+        "commission": costs.commission_per_trade,
+        "spread": spread,
+        "slippage": slippage,
+        "impact": impact,
+    }
 
 
 def _max_drawdown(equity_curve: list[float]) -> float:

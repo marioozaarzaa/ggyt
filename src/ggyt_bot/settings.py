@@ -49,11 +49,22 @@ class ExecutionConfig:
     poll_seconds: int = 60
     extended_hours: bool = False
     min_cash_reserve_pct: float = 0.50
+    trading_windows: list[str] = field(
+        default_factory=lambda: ["09:45-11:30", "14:00-16:00"]
+    )
+    max_spread_pct: float = 0.002
+    max_slippage_pct: float = 0.003
+    avoid_open_minutes: int = 15
+    avoid_close_minutes: int = 0
 
     def __post_init__(self) -> None:
         if self.poll_seconds < 10:
             raise ValueError("poll_seconds must be >= 10")
         _check_range("min_cash_reserve_pct", self.min_cash_reserve_pct, 0, 0.95, inclusive_min=True)
+        _check_range("max_spread_pct", self.max_spread_pct, 0, 0.05)
+        _check_range("max_slippage_pct", self.max_slippage_pct, 0, 0.05)
+        if self.avoid_open_minutes < 0 or self.avoid_close_minutes < 0:
+            raise ValueError("avoid market open/close minutes must be >= 0")
 
 
 @dataclass
@@ -122,6 +133,9 @@ class RuntimeSettings:
     ggyt_confirm_live_account_id: str = field(
         default_factory=lambda: os.getenv("GGYT_CONFIRM_LIVE_ACCOUNT_ID", "")
     )
+    ggyt_live_confirmation: str = field(
+        default_factory=lambda: os.getenv("GGYT_LIVE_CONFIRMATION", "")
+    )
 
     def validate_local_only(self) -> None:
         from ggyt_bot.security.policy import LocalOnlyPolicy, enforce_local_only
@@ -147,6 +161,8 @@ class RuntimeSettings:
             raise ValueError("API keys are required when GGYT_DRY_RUN=false")
         if not self.alpaca_paper and not self.ggyt_confirm_live_account_id:
             raise ValueError("GGYT_CONFIRM_LIVE_ACCOUNT_ID is required for live trading")
+        if not self.alpaca_paper and self.ggyt_live_confirmation != "I_ACCEPT_LIVE_TRADING_RISK":
+            raise ValueError("GGYT_LIVE_CONFIRMATION=I_ACCEPT_LIVE_TRADING_RISK is required")
 
 
 def _check_range(

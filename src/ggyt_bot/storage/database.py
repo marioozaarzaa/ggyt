@@ -7,7 +7,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-TABLES = ("trades", "orders", "signals", "positions", "daily_stats", "errors", "backtests")
+TABLES = (
+    "trades",
+    "orders",
+    "signals",
+    "positions",
+    "daily_stats",
+    "errors",
+    "market_conditions",
+    "adaptive_adjustments",
+    "backtests",
+)
 
 
 @dataclass(frozen=True)

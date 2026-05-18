@@ -95,6 +95,7 @@ Live trading está bloqueado salvo que se cumplan simultáneamente:
 ALPACA_PAPER=false
 GGYT_ALLOW_LIVE_TRADING=true
 GGYT_CONFIRM_LIVE_ACCOUNT_ID=<id exacto de tu cuenta Alpaca>
+GGYT_LIVE_CONFIRMATION=I_ACCEPT_LIVE_TRADING_RISK
 ```
 
 Además, el broker compara `broker.account.id` con `GGYT_CONFIRM_LIVE_ACCOUNT_ID`. Si no coincide, lanza `SecurityError` y no opera.
@@ -337,3 +338,94 @@ pytest --cov=ggyt_bot --cov-fail-under=80
 - Si la API o la red fallan, las órdenes pueden no ejecutarse como esperas.
 - Paper trading no reproduce perfectamente la ejecución real.
 - Activa live solo tras semanas/meses de pruebas, revisión de logs y auditoría del código.
+
+## Mejoras avanzadas añadidas
+
+### Motor multi-estrategia con scoring
+
+El sistema ya no depende de señales booleanas simples. Cada estrategia devuelve `signal`, `confidence` y `score`. El plugin `EnsembleStrategy` suma puntuaciones de `TrendStrategy`, `MomentumStrategy` y `MeanReversionStrategy`:
+
+```text
+score > 1   -> BUY
+score < -1  -> SELL
+-1..1       -> HOLD
+```
+
+La estrategia multi-indicador usa scoring incremental:
+
+```text
+EMA alignment  +0.4
+RSI válido     +0.2
+volumen OK     +0.2
+volatilidad OK +0.2
+BUY si score > 0.8
+```
+
+### Régimen de mercado
+
+`MarketRegime` clasifica el mercado como:
+
+- `TRENDING`
+- `RANGING`
+- `HIGH_VOLATILITY`
+- `LOW_VOLATILITY`
+- `PANIC`
+
+El engine selecciona automáticamente `TrendStrategy` en tendencia, `MeanReversionStrategy` en rango, reduce tamaño en alta volatilidad y detiene/liquida en `PANIC`.
+
+### Ejecución inteligente
+
+`ExecutionEngine` estima spread, slippage e impacto, divide órdenes grandes, evita mala liquidez y respeta ventanas de trading configurables:
+
+```yaml
+execution:
+  trading_windows: ["09:45-11:30", "14:00-16:00"]
+  max_spread_pct: 0.002
+  max_slippage_pct: 0.003
+```
+
+Si el spread o slippage estimado excede el límite, la operación se cancela antes de llegar al broker.
+
+### Circuit breaker
+
+`CircuitBreaker` detiene la operativa durante 24h tras 3 pérdidas consecutivas, activa modo emergencia con volatilidad extrema y para el engine con drawdown duro.
+
+### Aprendizaje adaptativo limitado
+
+No hay IA autónoma cambiando estrategias. Solo se permite ajustar parámetros dentro de límites cerrados y auditables:
+
+- `EMA_FAST`: 10–30
+- `STOP_MULTIPLIER`: 1–4
+- `RISK_MULTIPLIER`: 0.5–2
+
+Cada ajuste se guarda en SQLite en `adaptive_adjustments`.
+
+### Analítica post-trade
+
+`TradeAnalyzer` calcula mejores/peores horas, mejores/peores condiciones, win rate por hora y win rate por estrategia usando los trades guardados.
+
+### Backtesting realista
+
+El backtest ahora permite modelar:
+
+- comisión
+- spread
+- slippage
+- latencia
+- impacto de mercado
+
+Ejemplo:
+
+```bash
+ggyt backtest --symbol SPY --from 2022-01-01 --to 2024-12-31 --strategy ensemble \
+  --commission 1.0 --spread-bps 2 --slippage-bps 3 --latency-ms 100 --market-impact-bps 1
+```
+
+### Tablas SQLite adicionales
+
+Además de las tablas operativas principales, se añaden:
+
+- `market_conditions`
+- `adaptive_adjustments`
+
+Esto permite auditar régimen, volatilidad, spread, scoring y cambios limitados de parámetros.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 
@@ -78,3 +79,31 @@ def relative_volume(volumes: Sequence[float], window: int = 20) -> float | None:
     if baseline == 0:
         return None
     return volumes[-1] / baseline
+
+
+def volatility(values: Sequence[float], window: int = 20) -> float | None:
+    if len(values) <= window:
+        return None
+    returns = [
+        (current - previous) / previous
+        for previous, current in zip(values[-window - 1 : -1], values[-window:], strict=False)
+        if previous
+    ]
+    if len(returns) < 2:
+        return None
+    mean = sum(returns) / len(returns)
+    variance = sum((item - mean) ** 2 for item in returns) / (len(returns) - 1)
+    return math.sqrt(variance) * math.sqrt(252)
+
+
+def spread_pct(
+    bid: float | None,
+    ask: float | None,
+    fallback_price: float | None = None,
+) -> float | None:
+    if bid is not None and ask is not None and bid > 0 and ask >= bid:
+        midpoint = (bid + ask) / 2
+        return (ask - bid) / midpoint if midpoint else None
+    if fallback_price and fallback_price > 0:
+        return 0.0005
+    return None
