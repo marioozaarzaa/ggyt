@@ -64,6 +64,38 @@ def render(db_path: Path) -> None:
     st.subheader("Logs / errores")
     st.write(db.latest("errors", 20))
 
+    st.sidebar.title("Jarvis Terminal")
+    jarvis_mode = st.sidebar.selectbox("Modo Jarvis", ["Asesor", "Autónomo"])
+    st.sidebar.info(f"Jarvis está en modo: {jarvis_mode}")
+
+    st.subheader("🧠 Jarvis Memory & Insights")
+    insights = db.latest("jarvis_memory", 10)
+    for insight in insights:
+        with st.expander(f"Insight - {insight.get('created_at')}"):
+            st.write(f"**Thought:** {insight.get('thought')}")
+            st.json(insight)
+
+    user_input = st.text_input("Habla con Jarvis (Comandos de voz simulados)")
+    if user_input:
+        st.write(f"**Usuario:** {user_input}")
+        # In a real app, we would have access to the engine's jarvis instance here.
+        # For the dashboard demo, we simulate the routing logic or look it up in history.
+        st.write(f"**Jarvis:** Entendido, procesando '{user_input}'...")
+
+        # Simulation of task processing for the UI
+        if "crypto" in user_input.lower():
+            st.success("Crypto Agent: Scanning Solana/Ethereum for new opportunities. High social sentiment detected on AIXBT.")
+        elif "code" in user_input.lower() or "program" in user_input.lower():
+            st.success("Programming Agent: I can help architect this. Suggesting a modular Python approach.")
+        elif "web" in user_input.lower():
+            st.success("Web Builder: I can generate a Next.js/Tailwind scaffold for your new project.")
+        elif "marketing" in user_input.lower():
+            st.success("Marketing Agent: Analyzing target demographics. I can automate an email campaign.")
+        elif "research" in user_input.lower():
+            st.success("Research Agent: Browsing the web for the latest reports via Perplexity/Manus.")
+        else:
+            st.info("Jarvis: Tarea recibida. Mis agentes especializados están trabajando en ello.")
+
 
 if __name__ == "__main__":
     import sys

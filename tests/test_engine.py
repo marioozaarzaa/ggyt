@@ -2,6 +2,7 @@ from pathlib import Path
 
 from ggyt_bot.broker import SimulatedBroker
 from ggyt_bot.engine import TradingEngine
+from ggyt_bot.storage.database import TradingDatabase
 from ggyt_bot.settings import BotConfig, ExecutionConfig, RiskConfig, StrategyConfig
 from ggyt_bot.state import BotState
 
@@ -14,9 +15,11 @@ def test_engine_buys_in_simulation_when_signal_is_positive(tmp_path: Path) -> No
         execution=ExecutionConfig(min_cash_reserve_pct=0.5),
     )
     broker = SimulatedBroker({"SPY": [10, 10, 10, 11, 12]})
-    engine = TradingEngine(broker, config, BotState(), tmp_path / "events.jsonl")
+    db = TradingDatabase(tmp_path / "test.db")
+    engine = TradingEngine(broker, config, BotState(), tmp_path / "events.jsonl", database=db)
 
     events = engine.run_once()
 
+    assert any(event["type"] == "JARVIS_THOUGHT" for event in events)
     assert any(event["type"] == "BUY" for event in events)
     assert broker.positions()

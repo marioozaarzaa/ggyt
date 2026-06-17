@@ -1,0 +1,3 @@
+[console_scripts]
+ggyt = ggyt_bot.cli:app
+ggyt-bot = ggyt_bot.cli:app

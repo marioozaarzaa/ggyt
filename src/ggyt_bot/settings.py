@@ -68,12 +68,20 @@ class ExecutionConfig:
 
 
 @dataclass
+class JarvisConfig:
+    enabled: bool = True
+    autonomous_mode: bool = False
+    personality: str = "Professional Financial Advisor & Autonomous Executor"
+
+
+@dataclass
 class BotConfig:
     symbols: list[str] = field(default_factory=lambda: ["SPY"])
     strategy_name: str = "sma"
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    jarvis: JarvisConfig = field(default_factory=JarvisConfig)
 
     def __post_init__(self) -> None:
         symbols = sorted({symbol.strip().upper() for symbol in self.symbols if symbol.strip()})
@@ -90,6 +98,7 @@ class BotConfig:
             strategy=StrategyConfig(**raw.get("strategy", {})),
             risk=RiskConfig(**raw.get("risk", {})),
             execution=ExecutionConfig(**raw.get("execution", {})),
+            jarvis=JarvisConfig(**raw.get("jarvis", {})),
         )
 
     @classmethod

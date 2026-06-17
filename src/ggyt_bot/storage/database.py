@@ -17,6 +17,8 @@ TABLES = (
     "market_conditions",
     "adaptive_adjustments",
     "backtests",
+    "jarvis_memory",
+    "user_preferences",
 )
 
 

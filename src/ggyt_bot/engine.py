@@ -14,6 +14,13 @@ from ggyt_bot.data.market_regime import (
     regime_position_multiplier,
 )
 from ggyt_bot.execution.execution_engine import ExecutionEngine
+from ggyt_bot.jarvis.agents.advisor import FinancialAdvisorAgent
+from ggyt_bot.jarvis.agents.crypto import CryptoAgent
+from ggyt_bot.jarvis.agents.marketing import MarketingAgent
+from ggyt_bot.jarvis.agents.programming import ProgrammingAgent
+from ggyt_bot.jarvis.agents.research import ResearchAgent
+from ggyt_bot.jarvis.agents.web import WebCreationAgent
+from ggyt_bot.jarvis.orchestrator import JarvisOrchestrator
 from ggyt_bot.models import Signal
 from ggyt_bot.risk import RiskManager
 from ggyt_bot.risk.circuit_breaker import CircuitBreaker
@@ -50,6 +57,16 @@ class TradingEngine:
         self.circuit_breaker = CircuitBreaker(
             hard_drawdown_pct=max(config.risk.max_drawdown_pct, 0.10)
         )
+        self.jarvis = None
+        if config.jarvis.enabled and database:
+            self.jarvis = JarvisOrchestrator(database)
+            self.jarvis.personality = config.jarvis.personality
+            self.jarvis.register_agent(FinancialAdvisorAgent())
+            self.jarvis.register_agent(ProgrammingAgent())
+            self.jarvis.register_agent(WebCreationAgent())
+            self.jarvis.register_agent(MarketingAgent())
+            self.jarvis.register_agent(CryptoAgent())
+            self.jarvis.register_agent(ResearchAgent())
 
     def run_once(self) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
@@ -72,6 +89,24 @@ class TradingEngine:
             market_data = OHLCVSeries.from_closes(symbol, closes)
             features = build_features(market_data)
             regime = detect_market_regime(features)
+
+            if self.jarvis:
+                jarvis_context = {
+                    "symbol": symbol,
+                    "regime": regime.value,
+                    "volatility": features.volatility20,
+                    "equity": account.equity,
+                    "ts": datetime.now(UTC).isoformat(),
+                }
+                jarvis_thought = self.jarvis.think(jarvis_context)
+                events.append(
+                    self._event(
+                        "JARVIS_THOUGHT",
+                        symbol=symbol,
+                        thought=jarvis_thought,
+                    )
+                )
+
             events.append(
                 self._event(
                     "MARKET_CONDITION",
@@ -181,6 +216,7 @@ class TradingEngine:
                 "PANIC_FLATTEN": "orders",
                 "MARKET_CONDITION": "market_conditions",
                 "SKIP_TRADE": "orders",
+                "JARVIS_THOUGHT": "jarvis_memory",
             }.get(str(event.get("type")), "daily_stats")
             self.database.record(table, event)
 

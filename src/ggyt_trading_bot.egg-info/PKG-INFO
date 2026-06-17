@@ -1,0 +1,561 @@
+Metadata-Version: 2.4
+Name: ggyt-trading-bot
+Version: 0.1.0
+Summary: Local autonomous trading bot scaffold with Alpaca paper/live execution and strict risk controls.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: alpaca-py>=0.40.0
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: typer>=0.12
+Requires-Dist: rich>=13.7
+Requires-Dist: SQLAlchemy>=2.0
+Requires-Dist: streamlit>=1.35
+Requires-Dist: keyring>=25.0
+Requires-Dist: cryptography>=42.0
+Requires-Dist: MetaTrader5>=5.0.45
+Requires-Dist: pytz>=2024.1
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-cov>=5.0; extra == "dev"
+Requires-Dist: ruff>=0.5; extra == "dev"
+
+# GGYT Trading Bot
+
+Sistema local de trading algorítmico en Python para Alpaca con ejecución **paper/live**, arquitectura modular, controles de riesgo estrictos, recuperación automática, SQLite, auditoría JSONL, backtesting y dashboard local.
+
+> **Aviso importante:** esto no es asesoramiento financiero ni garantiza beneficios. No existe trading “sin casi riesgo”. El sistema está diseñado para ejecución local, paper trading, pruebas y reducción de daños operativos; no elimina riesgo de mercado, liquidez, slippage, fallos de broker/API, datos, configuración ni bugs.
+
+## Principios de diseño
+
+1. **Seguridad:** dry-run y paper por defecto; live requiere doble confirmación.
+2. **Local-only:** sin VPS, cloud workers, webhooks externos, sockets públicos ni APIs remotas.
+3. **Estabilidad:** estado persistente, recuperación al arrancar y watchdog.
+4. **Mantenibilidad:** módulos separados por core, data, strategies, risk, execution, portfolio, storage y dashboard.
+5. **Riesgo antes que rentabilidad:** kill switch, drawdown, pérdida diaria, sizing por ATR y límites de exposición.
+
+## Arquitectura
+
+```text
+src/ggyt_bot/
+├── core/              # engine wrapper, scheduler local, state manager, watchdog
+├── data/              # market data, indicadores, feature engine
+├── strategies/        # plugins: SMA, momentum, trend, mean reversion
+├── risk/              # drawdown, daily limit, exposure, position sizing, RiskManager
+├── execution/         # broker Alpaca, broker simulado/paper, order manager
+├── portfolio/         # PortfolioManager
+├── storage/           # SQLite + tablas + migraciones + auditoría
+├── dashboard/         # Streamlit local-only en 127.0.0.1
+├── backtesting/       # backtest y walk-forward
+├── security/          # política LOCAL_ONLY
+└── credentials/       # keyring OS + fallback local
+```
+
+Flujo principal:
+
+```text
+CLI local
+  └── RuntimeSettings.validate_execution_safety()
+        └── LocalOnlyPolicy(RUN_MODE=LOCAL_ONLY, bind_host=127.0.0.1)
+  └── StateManager.startup()
+        ├── load_state()
+        ├── sync_positions()
+        ├── sync_orders()
+        ├── recover_open_positions()
+        └── resume_engine()
+  └── TradingEngine.run_once/run_forever()
+        ├── Broker Alpaca / SimulatedBroker
+        ├── FeatureEngine: EMA, RSI, MACD, ATR, volumen relativo
+        ├── Strategy plugin
+        ├── RiskManager + ATR sizing
+        ├── OrderManager/Broker
+        ├── SQLite storage
+        └── JSONL audit log
+```
+
+## Instalación local
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+cp .env.example .env
+```
+
+Configura `.env` empezando siempre con paper + dry-run:
+
+```bash
+ALPACA_PAPER=true
+GGYT_DRY_RUN=true
+GGYT_ALLOW_LIVE_TRADING=false
+GGYT_CONFIRM_LIVE_ACCOUNT_ID=
+RUN_MODE=LOCAL_ONLY
+ALLOW_REMOTE=false
+ALLOW_WEBHOOKS=false
+ALLOW_EXTERNAL_COMMANDS=false
+GGYT_BIND_HOST=127.0.0.1
+```
+
+## Modo local obligatorio
+
+El bot valida una política local-only antes de ejecución real:
+
+- `RUN_MODE=LOCAL_ONLY`
+- `ALLOW_REMOTE=false`
+- `ALLOW_WEBHOOKS=false`
+- `ALLOW_EXTERNAL_COMMANDS=false`
+- dashboard/API local siempre en `127.0.0.1`
+- nunca `0.0.0.0`
+
+El proyecto no registra webhooks, sockets públicos, APIs remotas ni comandos externos.
+
+## Seguridad de live trading
+
+Live trading está bloqueado salvo que se cumplan simultáneamente:
+
+```bash
+ALPACA_PAPER=false
+GGYT_ALLOW_LIVE_TRADING=true
+GGYT_CONFIRM_LIVE_ACCOUNT_ID=<id exacto de tu cuenta Alpaca>
+GGYT_LIVE_CONFIRMATION=I_ACCEPT_LIVE_TRADING_RISK
+```
+
+Además, el broker compara `broker.account.id` con `GGYT_CONFIRM_LIVE_ACCOUNT_ID`. Si no coincide, lanza `SecurityError` y no opera.
+
+## Credenciales
+
+No se recomienda guardar claves reales en `.env`. El módulo `CredentialStore` intenta usar primero el almacén seguro del sistema operativo:
+
+- Windows Credential Manager
+- macOS Keychain
+- Linux Secret Service
+
+Si no está disponible, usa fallback local con permisos restrictivos para desarrollo. Para producción local real, instala/configura `keyring` y usa el almacén del sistema.
+
+## Comandos CLI
+
+```bash
+ggyt-bot demo
+ggyt-bot once --config config/example.yaml
+ggyt-bot run --config config/example.yaml
+ggyt-bot stop "motivo"
+ggyt-bot status
+ggyt-bot health
+ggyt-bot dashboard
+ggyt-bot backtest --symbol SPY --from 2022-01-01 --to 2024-12-31 --strategy sma
+ggyt-bot backtest --symbol SPY --strategy trend --walk-forward
+```
+
+> El script instalado se llama `ggyt-bot` por compatibilidad con el scaffold inicial.
+
+## Estrategias plugin
+
+Todas las estrategias implementan `StrategyBase` con:
+
+- `name`
+- `parameters`
+- `generate_signal()`
+- `validate_signal()`
+
+Plugins incluidos:
+
+- `sma`: mantiene la estrategia SMA original.
+- `multi_indicator_trend`: regla profesional inicial.
+- `momentum`: alias/plugin momentum sobre el motor multi-indicador.
+- `trend`: alias/plugin trend.
+- `mean_reversion`: RSI oversold/overbought.
+
+Regla inicial multi-indicador:
+
+```text
+BUY si:
+EMA20 > EMA50
+AND EMA50 > EMA200
+AND RSI > 45
+AND RSI < 65
+AND relative_volume > 1
+
+SELL si:
+EMA20 < EMA50
+OR stop/riesgo excedido
+```
+
+Indicadores disponibles:
+
+- EMA20
+- EMA50
+- EMA200
+- RSI
+- MACD
+- ATR
+- Volumen relativo
+
+## Gestión de riesgo
+
+Controles implementados:
+
+- `stop_on_any_loss`
+- límite de pérdida diaria
+- límite de drawdown
+- límite de exposición total
+- máximo riesgo por trade
+- stop por posición
+- reserva mínima de caja
+- minimum equity
+- kill switch global
+- liquidación opcional al halt
+
+Sizing por riesgo:
+
+```text
+riesgo_por_trade = equity * 0.005
+distancia_stop = ATR * 2
+shares = riesgo_por_trade / distancia_stop
+```
+
+El notional final queda limitado además por cash disponible, buying power, reserva mínima, exposición total y tamaño máximo por posición.
+
+## Persistencia
+
+SQLite es el almacenamiento principal. JSONL se mantiene como auditoría append-only.
+
+Tablas SQLite:
+
+- `trades`
+- `orders`
+- `signals`
+- `positions`
+- `daily_stats`
+- `errors`
+- `backtests`
+
+Ruta por defecto:
+
+```bash
+GGYT_DB_PATH=data/trading.sqlite3
+```
+
+## Recuperación automática
+
+Al arrancar se ejecuta:
+
+```python
+startup()
+load_state()
+sync_positions()
+sync_orders()
+recover_open_positions()
+resume_engine()
+```
+
+Esto permite sobrevivir mejor a reinicio del PC, cierre inesperado o excepción crítica, conservando estado en `state.json`, SQLite y JSONL.
+
+## Watchdog
+
+`SafetyWatchdog` puede parar el motor si:
+
+- `market_data_age > 60`
+- `api_errors > 5`
+- `drawdown > limit`
+- `account_equity < minimum`
+
+Si se dispara un stop crítico, el motor puede liquidar posiciones con `panic_flatten()` cuando `liquidate_on_halt=true`.
+
+## Backtesting y walk-forward
+
+Backtesting local:
+
+```bash
+ggyt-bot backtest --symbol SPY --from 2022-01-01 --to 2024-12-31 --strategy sma
+```
+
+Walk-forward:
+
+```bash
+ggyt-bot backtest --symbol SPY --strategy trend --walk-forward
+```
+
+Fases por defecto:
+
+- Entrenamiento: 2022-2024
+- Validación: 2025
+- Forward: 2026
+
+Métricas:
+
+- Sharpe ratio
+- Sortino
+- Max drawdown
+- Profit factor
+- Expectancy
+- Win rate
+- PnL
+
+Resultados en `backtests/`:
+
+- CSV equity curve
+- JSON métricas
+- SVG equity curve
+
+## Dashboard local
+
+```bash
+ggyt-bot dashboard
+```
+
+URL:
+
+```text
+http://localhost:8501
+```
+
+El dashboard fuerza `127.0.0.1` y muestra:
+
+- capital actual
+- PnL diario
+- riesgo usado/disponible
+- posiciones abiertas
+- órdenes recientes
+- estado del bot
+- señales
+- logs/errores
+
+## Configuración
+
+Edita `config/example.yaml`:
+
+```yaml
+symbols: ["SPY", "QQQ"]
+strategy_name: "multi_indicator_trend"
+risk:
+  max_position_notional_pct: 0.05
+  max_total_exposure_pct: 0.15
+  max_daily_loss_pct: 0.0025
+  max_drawdown_pct: 0.005
+  stop_on_any_loss: true
+  per_position_stop_loss_pct: 0.003
+  liquidate_on_halt: true
+  max_risk_per_trade_pct: 0.005
+execution:
+  min_cash_reserve_pct: 0.50
+```
+
+## Pruebas
+
+```bash
+PYTHONPATH=src ruff check .
+PYTHONPATH=src pytest -q
+```
+
+La meta de cobertura mínima es 80%; instala dependencias dev completas y ejecuta:
+
+```bash
+pytest --cov=ggyt_bot --cov-fail-under=80
+```
+
+## Riesgos y límites
+
+- Ninguna estrategia garantiza profit.
+- Los stops pueden tener slippage.
+- Si la API o la red fallan, las órdenes pueden no ejecutarse como esperas.
+- Paper trading no reproduce perfectamente la ejecución real.
+- Activa live solo tras semanas/meses de pruebas, revisión de logs y auditoría del código.
+
+## Mejoras avanzadas añadidas
+
+### Motor multi-estrategia con scoring
+
+El sistema ya no depende de señales booleanas simples. Cada estrategia devuelve `signal`, `confidence` y `score`. El plugin `EnsembleStrategy` suma puntuaciones de `TrendStrategy`, `MomentumStrategy` y `MeanReversionStrategy`:
+
+```text
+score > 1   -> BUY
+score < -1  -> SELL
+-1..1       -> HOLD
+```
+
+La estrategia multi-indicador usa scoring incremental:
+
+```text
+EMA alignment  +0.4
+RSI válido     +0.2
+volumen OK     +0.2
+volatilidad OK +0.2
+BUY si score > 0.8
+```
+
+### Régimen de mercado
+
+`MarketRegime` clasifica el mercado como:
+
+- `TRENDING`
+- `RANGING`
+- `HIGH_VOLATILITY`
+- `LOW_VOLATILITY`
+- `PANIC`
+
+El engine selecciona automáticamente `TrendStrategy` en tendencia, `MeanReversionStrategy` en rango, reduce tamaño en alta volatilidad y detiene/liquida en `PANIC`.
+
+### Ejecución inteligente
+
+`ExecutionEngine` estima spread, slippage e impacto, divide órdenes grandes, evita mala liquidez y respeta ventanas de trading configurables:
+
+```yaml
+execution:
+  trading_windows: ["09:45-11:30", "14:00-16:00"]
+  max_spread_pct: 0.002
+  max_slippage_pct: 0.003
+```
+
+Si el spread o slippage estimado excede el límite, la operación se cancela antes de llegar al broker.
+
+### Circuit breaker
+
+`CircuitBreaker` detiene la operativa durante 24h tras 3 pérdidas consecutivas, activa modo emergencia con volatilidad extrema y para el engine con drawdown duro.
+
+### Aprendizaje adaptativo limitado
+
+No hay IA autónoma cambiando estrategias. Solo se permite ajustar parámetros dentro de límites cerrados y auditables:
+
+- `EMA_FAST`: 10–30
+- `STOP_MULTIPLIER`: 1–4
+- `RISK_MULTIPLIER`: 0.5–2
+
+Cada ajuste se guarda en SQLite en `adaptive_adjustments`.
+
+### Analítica post-trade
+
+`TradeAnalyzer` calcula mejores/peores horas, mejores/peores condiciones, win rate por hora y win rate por estrategia usando los trades guardados.
+
+### Backtesting realista
+
+El backtest ahora permite modelar:
+
+- comisión
+- spread
+- slippage
+- latencia
+- impacto de mercado
+
+Ejemplo:
+
+```bash
+ggyt backtest --symbol SPY --from 2022-01-01 --to 2024-12-31 --strategy ensemble \
+  --commission 1.0 --spread-bps 2 --slippage-bps 3 --latency-ms 100 --market-impact-bps 1
+```
+
+### Tablas SQLite adicionales
+
+Además de las tablas operativas principales, se añaden:
+
+- `market_conditions`
+- `adaptive_adjustments`
+
+Esto permite auditar régimen, volatilidad, spread, scoring y cambios limitados de parámetros.
+
+## Integración MetaTrader 5 local
+
+GGYT mantiene Alpaca y añade MetaTrader 5 como broker adicional. MT5 funciona **solo contra el terminal instalado localmente en tu ordenador**; no se añaden VPS, webhooks, APIs públicas, sockets públicos ni ejecución distribuida.
+
+### Instalación MT5
+
+1. Instala MetaTrader 5 en tu ordenador.
+2. Instala dependencias Python:
+
+```bash
+pip install -r requirements.txt
+# o
+pip install -e '.[dev]'
+```
+
+Dependencias MT5 añadidas:
+
+- `MetaTrader5`
+- `pytz`
+
+### Configuración MT5
+
+Ejemplo `.env`:
+
+```bash
+BROKER=MT5
+MT5_LOGIN=123456
+MT5_PASSWORD=tu_password
+MT5_SERVER=Broker-Demo
+MT5_TERMINAL_PATH=/ruta/a/terminal64.exe
+MT5_MAGIC_NUMBER=888888
+MT5_TIMEOUT=60000
+MT5_MAX_SLIPPAGE=10
+MT5_MAX_SPREAD_PCT=0.003
+MT5_AUTO_RECONNECT=true
+MT5_ALLOWED_SYMBOLS=EURUSD,XAUUSD,GBPUSD,US100,USDJPY,NAS100,SPX500
+GGYT_DRY_RUN=true
+GGYT_ALLOW_LIVE_TRADING=false
+GGYT_CONFIRM_MT5_ACCOUNT=
+```
+
+Para enviar órdenes reales por MT5 se exige:
+
+```bash
+GGYT_DRY_RUN=false
+GGYT_ALLOW_LIVE_TRADING=true
+GGYT_CONFIRM_MT5_ACCOUNT=<login exacto de la cuenta MT5>
+```
+
+Si el login del terminal no coincide con `GGYT_CONFIRM_MT5_ACCOUNT`, el broker lanza `SecurityError` y no opera.
+
+### Comandos MT5
+
+```bash
+ggyt mt5-connect
+ggyt mt5-status
+ggyt mt5-symbols
+ggyt mt5-sync
+ggyt mt5-health
+```
+
+### Funcionalidades MT5 implementadas
+
+`MT5Broker` implementa la interfaz `BrokerBase`:
+
+- `connect()` / `disconnect()` / `is_connected()`
+- `get_balance()` / `get_equity()`
+- `get_positions()` / `get_orders()`
+- `get_market_data()` / `get_tick()` / `get_spread()` / `get_volume()`
+- `get_symbol_info()` / `get_market_status()`
+- `submit_order()` / `close_position()` / `cancel_order()`
+- `sync()` / `health_check()`
+
+Soporta órdenes:
+
+- BUY market
+- SELL market
+- BUY LIMIT / SELL LIMIT
+- BUY STOP / SELL STOP
+- STOP LOSS / TAKE PROFIT mediante `sl` / `tp`
+- ATR trailing stop con `update_atr_trailing_stop()`
+
+Antes de enviar una orden valida:
+
+- símbolo permitido en `MT5_ALLOWED_SYMBOLS`
+- símbolo visible/activado con `symbol_select()`
+- spread máximo
+- tick/market data disponible
+- permisos de trading
+- cuenta confirmada para live
+
+### Reconexión y recuperación
+
+Si la conexión se pierde y `MT5_AUTO_RECONNECT=true`, el broker intenta reconectar con backoff:
+
+```text
+1s, 2s, 5s, 10s, 30s
+```
+
+`sync()` sincroniza posiciones, órdenes, balance y equity en SQLite/JSONL. Los eventos de conexión, errores, rechazos, órdenes, fills simulados, spread y reconexiones se auditan localmente.
+
+### Errores comunes MT5
+
+- **`MetaTrader5 is required`**: instala `MetaTrader5` en el mismo Python donde ejecutas `ggyt`.
+- **`account_info() returned None`**: el terminal no está abierto, el login es incorrecto o el servidor no responde.
+- **`symbol is not in MT5_ALLOWED_SYMBOLS`**: añade el símbolo explícitamente al allowlist.
+- **`Could not activate symbol`**: el broker no ofrece ese símbolo o tiene otro nombre, por ejemplo `NAS100.cash`.
+- **`MT5 account login does not match`**: revisa `GGYT_CONFIRM_MT5_ACCOUNT` antes de live.
