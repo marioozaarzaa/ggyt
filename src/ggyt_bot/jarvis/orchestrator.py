@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from ggyt_bot.jarvis.actions import JarvisActionExecutor
 from ggyt_bot.jarvis.memory import MemoryManager
 from ggyt_bot.storage.database import TradingDatabase
 
@@ -13,6 +14,7 @@ class JarvisOrchestrator:
 
     def __init__(self, database: TradingDatabase) -> None:
         self.memory = MemoryManager(database)
+        self.actions = JarvisActionExecutor()
         self.agents = []
         self.personality = "Professional Financial Advisor & Autonomous Executor"
 
@@ -26,15 +28,43 @@ class JarvisOrchestrator:
         for agent in self.agents:
             thought = agent.analyze(context)
             insights.append(thought)
+            # Try to extract and queue actions
+            self._parse_and_queue_actions(thought)
 
         combined_thought = " | ".join(insights)
-        # We don't store here to avoid redundancy with engine's event logging
         return combined_thought
+
+    def _parse_and_queue_actions(self, text: str) -> None:
+        import re
+        import json
+        # Extract [ACTION: {"type": "...", "params": {}}]
+        matches = re.findall(r"\[ACTION:\s*(\{.*?\})\s*\]", text)
+        for match in matches:
+            try:
+                action_data = json.loads(match)
+                self.memory.db.record("jarvis_memory", {
+                    "type": "action",
+                    "status": "pending",
+                    "thought": text[:100] + "...",
+                    "details": action_data
+                })
+                logger.info(f"Jarvis: Action queued: {action_data.get('type')}")
+            except (json.JSONDecodeError, AttributeError):
+                continue
+
+    def execute_action(self, action_type: str, params: dict[str, Any]) -> str:
+        """Executes a physical action in the workspace."""
+        if action_type == "write_file":
+            return self.actions.write_file(params.get("filename", "untitled.txt"), params.get("content", ""))
+        if action_type == "run_script":
+            return self.actions.run_script(params.get("filename", ""))
+        return f"Jarvis: Unknown action type {action_type}"
 
     def process_task(self, task: str, context: dict[str, Any] | None = None) -> str:
         """Route a specific task to the best suited agent and return their response."""
         full_context = context or {}
         full_context["task"] = task
+        full_context["can_execute"] = True # Inform agents they can request actions
 
         responses = []
         for agent in self.agents:
@@ -43,6 +73,7 @@ class JarvisOrchestrator:
             # Filter out non-responses
             if "Monitoring" not in response and "Standing by" not in response and "Researching" not in response:
                 responses.append(response)
+                self._parse_and_queue_actions(response)
 
         if not responses:
             return "Jarvis: I'm not sure which agent can handle that best. Let me research it for you."

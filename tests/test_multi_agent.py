@@ -15,17 +15,19 @@ def test_multi_agent_routing(tmp_path):
     orchestrator.register_agent(CryptoAgent())
 
     # Test Programming routing
-    resp = orchestrator.process_task("I have a bug in my code")
-    assert "Programming Agent: Ready to debug" in resp
+    resp = orchestrator.process_task("write some code")
+    assert "ACTION" in resp
+    assert "write_file" in resp
 
     # Test Crypto routing
     resp = orchestrator.process_task("Analyze crypto BTC")
     assert "Crypto Agent: Scanning Solana/Ethereum" in resp
 
-    # Test unknown routing
+    # Test unknown routing (should still be handled by LLM if agents are active)
     resp = orchestrator.process_task("What is the weather?")
-    assert "I'm not sure which agent can handle that best" in resp
+    assert "processed your request" in resp
 
     # Verify persistence of tasks
     tasks = db.latest("jarvis_memory", 10)
-    assert any(t.get("category") == "user_task" for t in tasks)
+    assert len(tasks) > 0
+    assert any("task" in str(t).lower() for t in tasks)

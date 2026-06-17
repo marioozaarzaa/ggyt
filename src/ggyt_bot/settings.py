@@ -72,6 +72,7 @@ class JarvisConfig:
     enabled: bool = True
     autonomous_mode: bool = False
     personality: str = "Professional Financial Advisor & Autonomous Executor"
+    llm_provider: str = "mock"
 
 
 @dataclass
@@ -165,6 +166,9 @@ class RuntimeSettings:
     )
     ggyt_live_confirmation: str = field(
         default_factory=lambda: os.getenv("GGYT_LIVE_CONFIRMATION", "")
+    )
+    jarvis_llm_api_key: str = field(
+        default_factory=lambda: os.getenv("JARVIS_LLM_API_KEY", "")
     )
 
     def validate_local_only(self) -> None:

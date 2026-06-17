@@ -70,6 +70,11 @@ class TradingEngine:
 
     def run_once(self) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
+
+        # Process pending approved actions from Jarvis
+        if self.jarvis and self.database:
+            self._process_jarvis_actions()
+
         account = self.broker.account()
         positions = self.broker.positions()
         halt_reason = self.risk.halt_reason(account, positions, self.state)
@@ -227,6 +232,28 @@ class TradingEngine:
         with self.log_path.open("a", encoding="utf-8") as handle:
             for event in events:
                 handle.write(json.dumps(event, sort_keys=True) + "\n")
+
+    def _process_jarvis_actions(self) -> None:
+        if not self.database or not self.jarvis:
+            return
+        # Check for approved actions in the database
+        rows = self.database.latest("jarvis_memory", 50)
+        for row in rows:
+            if row.get("type") == "action" and row.get("status") == "approved":
+                action_data = row.get("details", {})
+                result = self.jarvis.execute_action(action_data.get("type"), action_data.get("params", {}))
+
+                # Mark as executed
+                new_payload = {**row, "status": "executed", "result": result}
+                # Remove internal SQLite columns from payload
+                new_payload.pop("id", None)
+                new_payload.pop("created_at", None)
+
+                self.database._conn.execute(
+                    "UPDATE jarvis_memory SET payload = ? WHERE id = ?",
+                    (json.dumps(new_payload, sort_keys=True), row["id"])
+                )
+                self.database._conn.commit()
 
 
 def _build_strategy(strategy_cls: type[StrategyBase], config: BotConfig) -> StrategyBase:

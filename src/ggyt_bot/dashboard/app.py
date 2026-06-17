@@ -68,14 +68,36 @@ def render(db_path: Path) -> None:
     jarvis_mode = st.sidebar.selectbox("Modo Jarvis", ["Asesor", "Autónomo"])
     st.sidebar.info(f"Jarvis está en modo: {jarvis_mode}")
 
-    st.subheader("🧠 Jarvis Memory & Insights")
-    insights = db.latest("jarvis_memory", 10)
-    for insight in insights:
-        with st.expander(f"Insight - {insight.get('created_at')}"):
-            st.write(f"**Thought:** {insight.get('thought')}")
-            st.json(insight)
+    workspace_path = Path("workspace")
+    if workspace_path.exists():
+        st.sidebar.subheader("📁 Workspace")
+        files = list(workspace_path.rglob("*"))
+        for f in files:
+            if f.is_file():
+                st.sidebar.text(f"📄 {f.name}")
 
-    user_input = st.text_input("Habla con Jarvis (Comandos de voz simulados)")
+    st.subheader("🧠 Jarvis Memory & Insights")
+    all_memory = db.latest("jarvis_memory", 20)
+
+    # Filter memory vs actions
+    insights = [m for m in all_memory if m.get("type") != "action"]
+    actions = [m for m in all_memory if m.get("type") == "action"]
+
+    tab1, tab2 = st.tabs(["Insights & Memory", "Action History"])
+
+    with tab1:
+        for insight in insights:
+            with st.expander(f"💡 {insight.get('created_at')}"):
+                st.write(f"**Thought:** {insight.get('thought')}")
+                st.json(insight)
+
+    with tab2:
+        for action in actions:
+            with st.expander(f"🎬 {action.get('created_at')} - {action.get('thought')}"):
+                st.json(action.get("details", {}))
+
+    st.divider()
+    user_input = st.text_input("🎙️ Habla con Jarvis (Comandos de voz simulados)")
     if user_input:
         st.write(f"**Usuario:** {user_input}")
         # In a real app, we would have access to the engine's jarvis instance here.
@@ -95,6 +117,20 @@ def render(db_path: Path) -> None:
             st.success("Research Agent: Browsing the web for the latest reports via Perplexity/Manus.")
         else:
             st.info("Jarvis: Tarea recibida. Mis agentes especializados están trabajando en ello.")
+
+        # Show pending actions from DB
+        pending_actions = [a for a in actions if a.get("status") == "pending"]
+        for pending in pending_actions:
+            st.warning(f"⚠️ Acción pendiente: {pending.get('details', {}).get('type')} - {pending.get('thought')}")
+            if st.button(f"Aprobar y Ejecutar #{pending['id']}", key=f"approve_{pending['id']}"):
+                # Update status in DB
+                db._conn.execute("UPDATE jarvis_memory SET payload = ? WHERE id = ?", (
+                    json.dumps({**pending, "status": "approved"}), pending["id"]
+                ))
+                db._conn.commit()
+                st.balloons()
+                st.success("Acción aprobada para ejecución.")
+                st.rerun()
 
 
 if __name__ == "__main__":
