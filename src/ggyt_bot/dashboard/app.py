@@ -64,6 +64,101 @@ def render(db_path: Path) -> None:
     st.subheader("Logs / errores")
     st.write(db.latest("errors", 20))
 
+    st.sidebar.title("🤖 Jarvis Terminal")
+    jarvis_mode = st.sidebar.selectbox("Modo Jarvis", ["Asesor", "Autónomo"])
+    st.sidebar.info(f"Modo: {jarvis_mode}")
+
+    st.sidebar.divider()
+    st.sidebar.subheader("🚀 Web Factory")
+    niche = st.sidebar.text_input("Nicho de negocio", "Restaurante")
+    if st.sidebar.button("Generar Web Demo"):
+        # Record a task in DB for the engine to pick up
+        db.record("jarvis_memory", {
+            "type": "user_task",
+            "thought": f"Generar web para {niche}",
+            "task": f"Create a modern landing page for a {niche} business with Tailwind CSS."
+        })
+        st.sidebar.success("Tarea enviada a Jarvis")
+
+    st.sidebar.divider()
+    workspace_path = Path("workspace")
+    if workspace_path.exists():
+        st.sidebar.subheader("📁 Workspace")
+        files = list(workspace_path.rglob("*"))
+        for f in files:
+            if f.is_file():
+                st.sidebar.text(f"📄 {f.name}")
+
+    st.subheader("🧠 Jarvis Memory & Insights")
+    all_memory = db.latest("jarvis_memory", 20)
+
+    # Filter memory vs actions
+    insights = [m for m in all_memory if m.get("type") != "action"]
+    actions = [m for m in all_memory if m.get("type") == "action"]
+
+    tab1, tab2, tab3 = st.tabs(["🧠 Memory", "🎬 Actions", "📊 Sales Pipeline"])
+
+    with tab1:
+        for insight in insights:
+            with st.expander(f"💡 {insight.get('created_at')}"):
+                st.write(f"**Thought:** {insight.get('thought')}")
+                st.json(insight)
+
+    with tab2:
+        for action in actions:
+            status_emoji = "✅" if action.get("status") == "executed" else "⏳"
+            with st.expander(f"{status_emoji} {action.get('created_at')} - {action.get('thought')}"):
+                st.json(action.get("details", {}))
+                if action.get("result"):
+                    st.code(action.get("result"))
+
+    with tab3:
+        st.subheader("Leads sin Web")
+        # In a real app, this would query a 'leads' table
+        st.info("Buscando leads en Google Maps...")
+        st.write("1. Peluquería Estilo - Contacto: +34 912 345 678")
+        st.write("2. Corte y Color - Contacto: +34 600 000 000")
+        if st.button("Contactar Leads Automáticamente"):
+            st.success("Enviando secuencias de email/WhatsApp...")
+
+    st.divider()
+    user_input = st.text_input("🎙️ Habla con Jarvis (Comandos de voz simulados)")
+    if user_input:
+        st.write(f"**Usuario:** {user_input}")
+        # In a real app, we would have access to the engine's jarvis instance here.
+        # For the dashboard demo, we simulate the routing logic or look it up in history.
+        st.write(f"**Jarvis:** Entendido, procesando '{user_input}'...")
+
+        # Simulation of task processing for the UI
+        if "crypto" in user_input.lower():
+            st.success("Crypto Agent: Scanning Solana/Ethereum for new opportunities. High social sentiment detected on AIXBT.")
+        elif "code" in user_input.lower() or "program" in user_input.lower():
+            st.success("Programming Agent: I can help architect this. Suggesting a modular Python approach.")
+        elif "web" in user_input.lower():
+            st.success("Web Builder: I can generate a Next.js/Tailwind scaffold for your new project.")
+        elif "marketing" in user_input.lower():
+            st.success("Marketing Agent: Analyzing target demographics. I can automate an email campaign.")
+        elif "research" in user_input.lower():
+            st.success("Research Agent: Browsing the web for the latest reports via Perplexity/Manus.")
+        else:
+            st.info("Jarvis: Tarea recibida. Mis agentes especializados están trabajando en ello.")
+
+        # Show pending actions from DB
+        pending_actions = [a for a in actions if a.get("status") == "pending"]
+        for pending in pending_actions:
+            st.warning(f"⚠️ Acción pendiente: {pending.get('details', {}).get('type')} - {pending.get('thought')}")
+            if st.button(f"Aprobar y Ejecutar #{pending['id']}", key=f"approve_{pending['id']}"):
+                # Update status in DB - Ensure we don't nest id/created_at
+                clean_payload = {k: v for k, v in pending.items() if k not in ["id", "created_at"]}
+                clean_payload["status"] = "approved"
+                db._conn.execute("UPDATE jarvis_memory SET payload = ? WHERE id = ?", (
+                    json.dumps(clean_payload, sort_keys=True), pending["id"]
+                ))
+                db._conn.commit()
+                st.balloons()
+                st.success("Acción aprobada para ejecución.")
+                st.rerun()
+
 
 if __name__ == "__main__":
     import sys

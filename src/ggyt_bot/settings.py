@@ -68,12 +68,21 @@ class ExecutionConfig:
 
 
 @dataclass
+class JarvisConfig:
+    enabled: bool = True
+    autonomous_mode: bool = False
+    personality: str = "Professional Financial Advisor & Autonomous Executor"
+    llm_provider: str = "mock"
+
+
+@dataclass
 class BotConfig:
     symbols: list[str] = field(default_factory=lambda: ["SPY"])
     strategy_name: str = "sma"
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    jarvis: JarvisConfig = field(default_factory=JarvisConfig)
 
     def __post_init__(self) -> None:
         symbols = sorted({symbol.strip().upper() for symbol in self.symbols if symbol.strip()})
@@ -90,6 +99,7 @@ class BotConfig:
             strategy=StrategyConfig(**raw.get("strategy", {})),
             risk=RiskConfig(**raw.get("risk", {})),
             execution=ExecutionConfig(**raw.get("execution", {})),
+            jarvis=JarvisConfig(**raw.get("jarvis", {})),
         )
 
     @classmethod
@@ -156,6 +166,9 @@ class RuntimeSettings:
     )
     ggyt_live_confirmation: str = field(
         default_factory=lambda: os.getenv("GGYT_LIVE_CONFIRMATION", "")
+    )
+    jarvis_llm_api_key: str = field(
+        default_factory=lambda: os.getenv("JARVIS_LLM_API_KEY", "")
     )
 
     def validate_local_only(self) -> None:

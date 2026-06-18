@@ -14,6 +14,14 @@ from ggyt_bot.data.market_regime import (
     regime_position_multiplier,
 )
 from ggyt_bot.execution.execution_engine import ExecutionEngine
+from ggyt_bot.jarvis.agents.advisor import FinancialAdvisorAgent
+from ggyt_bot.jarvis.agents.crypto import CryptoAgent
+from ggyt_bot.jarvis.agents.leads import LeadGeneratorAgent
+from ggyt_bot.jarvis.agents.marketing import MarketingAgent
+from ggyt_bot.jarvis.agents.programming import ProgrammingAgent
+from ggyt_bot.jarvis.agents.research import ResearchAgent
+from ggyt_bot.jarvis.agents.web import WebCreationAgent
+from ggyt_bot.jarvis.orchestrator import JarvisOrchestrator
 from ggyt_bot.models import Signal
 from ggyt_bot.risk import RiskManager
 from ggyt_bot.risk.circuit_breaker import CircuitBreaker
@@ -50,9 +58,26 @@ class TradingEngine:
         self.circuit_breaker = CircuitBreaker(
             hard_drawdown_pct=max(config.risk.max_drawdown_pct, 0.10)
         )
+        self.jarvis = None
+        if config.jarvis.enabled and database:
+            self.jarvis = JarvisOrchestrator(database)
+            self.jarvis.personality = config.jarvis.personality
+            self.jarvis.register_agent(FinancialAdvisorAgent())
+            self.jarvis.register_agent(ProgrammingAgent())
+            self.jarvis.register_agent(WebCreationAgent())
+            self.jarvis.register_agent(MarketingAgent())
+            self.jarvis.register_agent(CryptoAgent())
+            self.jarvis.register_agent(ResearchAgent())
+            self.jarvis.register_agent(LeadGeneratorAgent())
 
     def run_once(self) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
+
+        # Process pending tasks/actions from Jarvis
+        if self.jarvis and self.database:
+            self._process_user_tasks()
+            self._process_jarvis_actions()
+
         account = self.broker.account()
         positions = self.broker.positions()
         halt_reason = self.risk.halt_reason(account, positions, self.state)
@@ -72,6 +97,24 @@ class TradingEngine:
             market_data = OHLCVSeries.from_closes(symbol, closes)
             features = build_features(market_data)
             regime = detect_market_regime(features)
+
+            if self.jarvis:
+                jarvis_context = {
+                    "symbol": symbol,
+                    "regime": regime.value,
+                    "volatility": features.volatility20,
+                    "equity": account.equity,
+                    "ts": datetime.now(UTC).isoformat(),
+                }
+                jarvis_thought = self.jarvis.think(jarvis_context)
+                events.append(
+                    self._event(
+                        "JARVIS_THOUGHT",
+                        symbol=symbol,
+                        thought=jarvis_thought,
+                    )
+                )
+
             events.append(
                 self._event(
                     "MARKET_CONDITION",
@@ -181,6 +224,7 @@ class TradingEngine:
                 "PANIC_FLATTEN": "orders",
                 "MARKET_CONDITION": "market_conditions",
                 "SKIP_TRADE": "orders",
+                "JARVIS_THOUGHT": "jarvis_memory",
             }.get(str(event.get("type")), "daily_stats")
             self.database.record(table, event)
 
@@ -191,6 +235,49 @@ class TradingEngine:
         with self.log_path.open("a", encoding="utf-8") as handle:
             for event in events:
                 handle.write(json.dumps(event, sort_keys=True) + "\n")
+
+    def _process_user_tasks(self) -> None:
+        if not self.database or not self.jarvis:
+            return
+        # Get pending user tasks
+        rows = self.database.latest("jarvis_memory", 20)
+        for row in rows:
+            if row.get("type") == "user_task" and not row.get("processed"):
+                task = row.get("task", "")
+                thought = self.jarvis.process_task(task)
+
+                # Mark task as processed
+                new_payload = {**row, "processed": True, "result_thought": thought}
+                new_payload.pop("id", None)
+                new_payload.pop("created_at", None)
+
+                self.database._conn.execute(
+                    "UPDATE jarvis_memory SET payload = ? WHERE id = ?",
+                    (json.dumps(new_payload, sort_keys=True), row["id"])
+                )
+                self.database._conn.commit()
+
+    def _process_jarvis_actions(self) -> None:
+        if not self.database or not self.jarvis:
+            return
+        # Check for approved actions in the database
+        rows = self.database.latest("jarvis_memory", 50)
+        for row in rows:
+            if row.get("type") == "action" and row.get("status") == "approved":
+                action_data = row.get("details", {})
+                result = self.jarvis.execute_action(action_data.get("type"), action_data.get("params", {}))
+
+                # Mark as executed
+                new_payload = {**row, "status": "executed", "result": result}
+                # Remove internal SQLite columns from payload
+                new_payload.pop("id", None)
+                new_payload.pop("created_at", None)
+
+                self.database._conn.execute(
+                    "UPDATE jarvis_memory SET payload = ? WHERE id = ?",
+                    (json.dumps(new_payload, sort_keys=True), row["id"])
+                )
+                self.database._conn.commit()
 
 
 def _build_strategy(strategy_cls: type[StrategyBase], config: BotConfig) -> StrategyBase:
