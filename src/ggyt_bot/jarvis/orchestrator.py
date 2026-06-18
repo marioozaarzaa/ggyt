@@ -37,19 +37,22 @@ class JarvisOrchestrator:
     def _parse_and_queue_actions(self, text: str) -> None:
         import re
         import json
-        # Extract [ACTION: {"type": "...", "params": {}}]
-        matches = re.findall(r"\[ACTION:\s*(\{.*?\})\s*\]", text)
+        # Extract [ACTION: {"type": "...", "params": {}}] - Supporting multi-line JSON
+        matches = re.findall(r"\[ACTION:\s*(\{.*?\})\s*\]", text, re.DOTALL)
         for match in matches:
             try:
-                action_data = json.loads(match)
-                self.memory.db.record("jarvis_memory", {
+                # Clean up potential markdown or spacing
+                clean_json = match.strip()
+                action_data = json.loads(clean_json)
+                self.memory.database.record("jarvis_memory", {
                     "type": "action",
                     "status": "pending",
-                    "thought": text[:100] + "...",
+                    "thought": text[:150].replace("\n", " ") + "...",
                     "details": action_data
                 })
                 logger.info(f"Jarvis: Action queued: {action_data.get('type')}")
-            except (json.JSONDecodeError, AttributeError):
+            except (json.JSONDecodeError, AttributeError) as e:
+                logger.error(f"Jarvis: Failed to parse action JSON: {e}")
                 continue
 
     def execute_action(self, action_type: str, params: dict[str, Any]) -> str:
@@ -81,7 +84,8 @@ class JarvisOrchestrator:
             return "Jarvis: I'm not sure which agent can handle that best. Let me research it for you."
 
         final_response = " | ".join(responses)
-        self.memory.store_insight("user_task", final_response, {"task": task})
+        # Marked as processed if we are returning immediately to a request
+        self.memory.store_insight("insight", final_response, {"task": task, "processed": True})
         return final_response
 
     def get_status(self) -> str:

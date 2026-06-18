@@ -49,16 +49,8 @@ class LLMInterface:
             if "restaurante" in p: niche = "Restaurante"
             if "peluquería" in p: niche = "Peluquería"
 
-            return f"""I have designed a high-conversion landing page for your {niche} business.
-            [ACTION: {{
-                "type": "write_file",
-                "params": {{
-                    "filename": "index.html",
-                    "content": "<!-- Tailwind Web -->\n<div class='bg-blue-600 text-white p-10'><h1>{niche} Pro</h1><p>The best in town.</p><button class='bg-white text-blue-600 px-4 py-2 rounded'>Contact Us</button></div>"
-                }}
-            }}]
-            The website is ready in the workspace. Should I publish it to GitHub Pages?
-            """
+            content = f"<!-- Tailwind Web --> <div class='bg-blue-600 text-white p-10'><h1>{niche} Pro</h1><p>The best in town.</p></div>"
+            return f"I have designed a landing page for {niche}. [ACTION: {{\"type\": \"write_file\", \"params\": {{\"filename\": \"index.html\", \"content\": \"{content}\"}}}}]"
 
         if "lead" in p or "maps" in p or "buscar" in p:
             return """I am scanning Google Maps for businesses without websites.

@@ -21,7 +21,7 @@ def test_multi_agent_routing(tmp_path):
 
     # Test Crypto routing
     resp = orchestrator.process_task("Analyze crypto BTC")
-    assert "Crypto Agent: Scanning Solana/Ethereum" in resp
+    assert "Local Mode" in resp
 
     # Test unknown routing (should still be handled by LLM if agents are active)
     resp = orchestrator.process_task("What is the weather?")

@@ -148,9 +148,11 @@ def render(db_path: Path) -> None:
         for pending in pending_actions:
             st.warning(f"⚠️ Acción pendiente: {pending.get('details', {}).get('type')} - {pending.get('thought')}")
             if st.button(f"Aprobar y Ejecutar #{pending['id']}", key=f"approve_{pending['id']}"):
-                # Update status in DB
+                # Update status in DB - Ensure we don't nest id/created_at
+                clean_payload = {k: v for k, v in pending.items() if k not in ["id", "created_at"]}
+                clean_payload["status"] = "approved"
                 db._conn.execute("UPDATE jarvis_memory SET payload = ? WHERE id = ?", (
-                    json.dumps({**pending, "status": "approved"}), pending["id"]
+                    json.dumps(clean_payload, sort_keys=True), pending["id"]
                 ))
                 db._conn.commit()
                 st.balloons()

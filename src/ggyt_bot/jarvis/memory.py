@@ -15,8 +15,8 @@ class MemoryManager:
     def store_insight(self, category: str, content: str, metadata: dict[str, Any] | None = None) -> None:
         payload = {
             "ts": datetime.now(UTC).isoformat(),
-            "category": category,
-            "content": content,
+            "type": category,
+            "thought": content,
             "metadata": metadata or {},
         }
         self.database.record("jarvis_memory", payload)
