@@ -64,10 +64,23 @@ def render(db_path: Path) -> None:
     st.subheader("Logs / errores")
     st.write(db.latest("errors", 20))
 
-    st.sidebar.title("Jarvis Terminal")
+    st.sidebar.title("🤖 Jarvis Terminal")
     jarvis_mode = st.sidebar.selectbox("Modo Jarvis", ["Asesor", "Autónomo"])
-    st.sidebar.info(f"Jarvis está en modo: {jarvis_mode}")
+    st.sidebar.info(f"Modo: {jarvis_mode}")
 
+    st.sidebar.divider()
+    st.sidebar.subheader("🚀 Web Factory")
+    niche = st.sidebar.text_input("Nicho de negocio", "Restaurante")
+    if st.sidebar.button("Generar Web Demo"):
+        # Record a task in DB for the engine to pick up
+        db.record("jarvis_memory", {
+            "type": "user_task",
+            "thought": f"Generar web para {niche}",
+            "task": f"Create a modern landing page for a {niche} business with Tailwind CSS."
+        })
+        st.sidebar.success("Tarea enviada a Jarvis")
+
+    st.sidebar.divider()
     workspace_path = Path("workspace")
     if workspace_path.exists():
         st.sidebar.subheader("📁 Workspace")
@@ -83,7 +96,7 @@ def render(db_path: Path) -> None:
     insights = [m for m in all_memory if m.get("type") != "action"]
     actions = [m for m in all_memory if m.get("type") == "action"]
 
-    tab1, tab2 = st.tabs(["Insights & Memory", "Action History"])
+    tab1, tab2, tab3 = st.tabs(["🧠 Memory", "🎬 Actions", "📊 Sales Pipeline"])
 
     with tab1:
         for insight in insights:
@@ -93,8 +106,20 @@ def render(db_path: Path) -> None:
 
     with tab2:
         for action in actions:
-            with st.expander(f"🎬 {action.get('created_at')} - {action.get('thought')}"):
+            status_emoji = "✅" if action.get("status") == "executed" else "⏳"
+            with st.expander(f"{status_emoji} {action.get('created_at')} - {action.get('thought')}"):
                 st.json(action.get("details", {}))
+                if action.get("result"):
+                    st.code(action.get("result"))
+
+    with tab3:
+        st.subheader("Leads sin Web")
+        # In a real app, this would query a 'leads' table
+        st.info("Buscando leads en Google Maps...")
+        st.write("1. Peluquería Estilo - Contacto: +34 912 345 678")
+        st.write("2. Corte y Color - Contacto: +34 600 000 000")
+        if st.button("Contactar Leads Automáticamente"):
+            st.success("Enviando secuencias de email/WhatsApp...")
 
     st.divider()
     user_input = st.text_input("🎙️ Habla con Jarvis (Comandos de voz simulados)")

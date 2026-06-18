@@ -16,6 +16,7 @@ from ggyt_bot.data.market_regime import (
 from ggyt_bot.execution.execution_engine import ExecutionEngine
 from ggyt_bot.jarvis.agents.advisor import FinancialAdvisorAgent
 from ggyt_bot.jarvis.agents.crypto import CryptoAgent
+from ggyt_bot.jarvis.agents.leads import LeadGeneratorAgent
 from ggyt_bot.jarvis.agents.marketing import MarketingAgent
 from ggyt_bot.jarvis.agents.programming import ProgrammingAgent
 from ggyt_bot.jarvis.agents.research import ResearchAgent
@@ -67,12 +68,14 @@ class TradingEngine:
             self.jarvis.register_agent(MarketingAgent())
             self.jarvis.register_agent(CryptoAgent())
             self.jarvis.register_agent(ResearchAgent())
+            self.jarvis.register_agent(LeadGeneratorAgent())
 
     def run_once(self) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
 
-        # Process pending approved actions from Jarvis
+        # Process pending tasks/actions from Jarvis
         if self.jarvis and self.database:
+            self._process_user_tasks()
             self._process_jarvis_actions()
 
         account = self.broker.account()
@@ -232,6 +235,27 @@ class TradingEngine:
         with self.log_path.open("a", encoding="utf-8") as handle:
             for event in events:
                 handle.write(json.dumps(event, sort_keys=True) + "\n")
+
+    def _process_user_tasks(self) -> None:
+        if not self.database or not self.jarvis:
+            return
+        # Get pending user tasks
+        rows = self.database.latest("jarvis_memory", 20)
+        for row in rows:
+            if row.get("type") == "user_task" and not row.get("processed"):
+                task = row.get("task", "")
+                thought = self.jarvis.process_task(task)
+
+                # Mark task as processed
+                new_payload = {**row, "processed": True, "result_thought": thought}
+                new_payload.pop("id", None)
+                new_payload.pop("created_at", None)
+
+                self.database._conn.execute(
+                    "UPDATE jarvis_memory SET payload = ? WHERE id = ?",
+                    (json.dumps(new_payload, sort_keys=True), row["id"])
+                )
+                self.database._conn.commit()
 
     def _process_jarvis_actions(self) -> None:
         if not self.database or not self.jarvis:

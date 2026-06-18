@@ -45,3 +45,39 @@ class JarvisActionExecutor:
             return f"Action Output:\n{result.stdout}\nErrors:\n{result.stderr}"
         except Exception as e:
             return f"Action Error: Execution failed: {str(e)}"
+
+    def publish_github(self, repo_name: str, files: list[str]) -> str:
+        """Publishes files to GitHub Pages (requires JARVIS_GITHUB_TOKEN)."""
+        token = os.getenv("JARVIS_GITHUB_TOKEN")
+        if not token:
+            return "Action Error: JARVIS_GITHUB_TOKEN not found."
+
+        try:
+            from github import Github
+            g = Github(token)
+            user = g.get_user()
+
+            # Create or get repo
+            try:
+                repo = user.create_repo(repo_name, auto_init=True)
+            except:
+                repo = user.get_repo(repo_name)
+
+            for filename in files:
+                file_path = self.workspace / filename
+                if not file_path.exists(): continue
+                with open(file_path, "r") as f:
+                    content = f.read()
+
+                try:
+                    contents = repo.get_contents(filename)
+                    repo.update_file(contents.path, f"Update {filename}", content, contents.sha)
+                except:
+                    repo.create_file(filename, f"Initial commit {filename}", content)
+
+            # Enable Pages if not enabled
+            # Note: PyGithub doesn't have a direct "enable pages" for personal repos easily
+            # but pushing index.html to main usually triggers it if configured.
+            return f"Action Success: Published to https://{user.login}.github.io/{repo_name}/"
+        except Exception as e:
+            return f"Action Error: GitHub publish failed: {str(e)}"

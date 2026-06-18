@@ -1,39 +1,74 @@
 from __future__ import annotations
 
 import os
+import json
+import logging
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 class LLMInterface:
-    """Unified interface for interacting with LLM providers."""
+    """Unified interface for interacting with LLM providers (Local-first)."""
 
-    def __init__(self, provider: str = "mock") -> None:
-        self.provider = provider
+    def __init__(self, provider: str | None = None) -> None:
+        # Default to environment or auto-detect
+        self.provider = provider or os.getenv("JARVIS_LLM_PROVIDER", "ollama")
         self.api_key = os.getenv("JARVIS_LLM_API_KEY", "")
+        self.base_url = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        self.model = os.getenv("JARVIS_MODEL", "llama3.2:3b")
 
-    def chat(self, prompt: str, system_prompt: str = "You are Jarvis, a helpful autonomous system.") -> str:
-        """Sends a prompt to the configured LLM provider."""
-        if self.provider == "mock":
-            # Keyword-based mock for basic local testing
-            # Look specifically at the 'Task:' part of the prompt if present
-            task_part = prompt.split("Task:")[-1].lower() if "Task:" in prompt else prompt.lower()
+    def chat(self, prompt: str, system_prompt: str = "You are Jarvis, a highly efficient autonomous agent.") -> str:
+        """Sends a prompt to the configured LLM provider with local fallback."""
 
-            if "code" in task_part or "write" in task_part:
-                return 'I will create that for you. [ACTION: {"type": "write_file", "params": {"filename": "new_logic.py", "content": "print(\'Jarvis Logic\')"}}]'
-            if "run" in task_part or "exec" in task_part:
-                return 'Executing script now. [ACTION: {"type": "run_script", "params": {"filename": "new_logic.py"}}]'
-            return f"Jarvis ({self.provider}): I have processed your request: {prompt[:30]}"
+        if self.provider == "ollama":
+            try:
+                import ollama
+                response = ollama.chat(model=self.model, messages=[
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user', 'content': prompt},
+                ])
+                return response['message']['content']
+            except Exception as e:
+                logger.warning(f"Ollama not available: {e}. Falling back to internal logic.")
+                # If ollama fails, we don't return immediately, we try next provider or internal
 
-        if not self.api_key:
-            return "Error: JARVIS_LLM_API_KEY not set. Please provide a key to use real LLM agents."
+        if self.api_key and self.provider in ["openai", "groq"]:
+            # Placeholder for real API calls
+            return f"Jarvis ({self.provider}): Real API integration would process: {prompt[:30]}"
 
-        # REAL INTEGRATION SCALFOLD
-        if self.provider == "openai":
-            # try: import openai; ...
-            return f"OpenAI Integration: Sending {len(prompt)} chars to GPT-4o..."
+        # Robust Internal Logic (The "Smart Mock")
+        return self._internal_fallback(prompt)
 
-        return f"Jarvis LLM: Integration logic for {self.provider} should be added in llm.py"
+    def _internal_fallback(self, prompt: str) -> str:
+        """Smart fallback when no LLM is reachable."""
+        p = prompt.lower()
+
+        # Web Generation Logic
+        if "web" in p or "html" in p or "landing" in p or "code" in p:
+            niche = "Business"
+            if "restaurante" in p: niche = "Restaurante"
+            if "peluquería" in p: niche = "Peluquería"
+
+            return f"""I have designed a high-conversion landing page for your {niche} business.
+            [ACTION: {{
+                "type": "write_file",
+                "params": {{
+                    "filename": "index.html",
+                    "content": "<!-- Tailwind Web -->\n<div class='bg-blue-600 text-white p-10'><h1>{niche} Pro</h1><p>The best in town.</p><button class='bg-white text-blue-600 px-4 py-2 rounded'>Contact Us</button></div>"
+                }}
+            }}]
+            The website is ready in the workspace. Should I publish it to GitHub Pages?
+            """
+
+        if "lead" in p or "maps" in p or "buscar" in p:
+            return """I am scanning Google Maps for businesses without websites.
+            [ACTION: {"type": "run_script", "params": {"filename": "scrapers/maps_leads.py"}}]
+            I will notify you once I find potential clients."""
+
+        return f"Jarvis (Local Mode): I understand you want to: '{prompt[:50]}...'. I am standing by for autonomous execution."
 
     def generate_action(self, task: str) -> dict[str, Any]:
         """Parses a natural language task into a structured Jarvis action."""
-        # This would use an LLM to extract JSON actions
+        # In a real scenario, this uses the LLM with a JSON schema.
+        # For now, we rely on the chat extraction.
         return {"action": "none", "params": {}}

@@ -58,6 +58,8 @@ class JarvisOrchestrator:
             return self.actions.write_file(params.get("filename", "untitled.txt"), params.get("content", ""))
         if action_type == "run_script":
             return self.actions.run_script(params.get("filename", ""))
+        if action_type == "publish_github":
+            return self.actions.publish_github(params.get("repo_name", "my-web"), params.get("files", ["index.html"]))
         return f"Jarvis: Unknown action type {action_type}"
 
     def process_task(self, task: str, context: dict[str, Any] | None = None) -> str:
